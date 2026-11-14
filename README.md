@@ -4,7 +4,7 @@
   <img src="banner.svg" alt="Watch the sky move." width="100%">
 </p>
 
-<h1 align="center">[Project Name]</h1>
+<h1 align="center">Space Explorer 3000 [TEMP]</h1>
 
 <p align="center">
   <b>Watch the sky <i>move</i>.</b><br>
