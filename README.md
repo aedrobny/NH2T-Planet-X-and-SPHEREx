@@ -61,7 +61,7 @@ But there is far too much sky for one person to scan, and the data is hard to re
 
 1. **Target.** Type a star's name or sky coordinates, or pick a preset.
 2. **Flip.** Press play to step through the images in time order.
-3. **Discover.** Switch to the median view so movers pop out in red and blue, then read the explanation.
+3. **Discover.** Switch to the median view so movers pop out in [SOME COLORS], then read the explanation.
 
 **Good first targets**
 
@@ -77,7 +77,7 @@ But there is far too much sky for one person to scan, and the data is hard to re
 <table>
   <tr>
     <td><img src="screenshot-flip.png" alt="[describe]"><br><sub><i>[Caption: flipping through time]</i></sub></td>
-    <td><img src="screenshot-movers.png" alt="[describe]"><br><sub><i>[Caption: the mover pops out as red and blue]</i></sub></td>
+    <td><img src="screenshot-movers.png" alt="[describe]"><br><sub><i>[Caption: the mover pops out as [SOME COLORS]]</i></sub></td>
     <td><img src="screenshot-ai.png" alt="[describe]"><br><sub><i>[Caption: the plain-language explanation]</i></sub></td>
   </tr>
 </table>
@@ -100,7 +100,7 @@ flowchart LR
 
 ## What's different
 
-- **Movers light up.** We don't just play frames. We subtract the background so motion shows as red and blue.
+- **Movers light up.** We don't just play frames. We subtract the background so motion shows as [SOME COLORS].
 - **Anyone can find a star.** Search by name, not only coordinates.
 - **It explains itself.** Plain-language explanations make the data approachable for students, teachers and curious people.
 
@@ -118,7 +118,7 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 
 ## AI usage
 
-- **In the product:** AI is used for [name search and plain-language explanations]. Model: [model/provider].
+- **In the product:** AI is used for name searching, plain-language explanations, [ETC]. Model: [AI MODEL/PROVIDER].
 - **In development:** [Describe any AI tools used to write code, copy or documentation.]
 - AI-generated explanations are a starting point, not a verified scientific result.
 
