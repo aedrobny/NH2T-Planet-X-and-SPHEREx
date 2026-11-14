@@ -10,7 +10,7 @@ Keep these files together in the project root:
 project/
 ├── spherex_server.py
 ├── spherex_local_png_viewer.html
-├── spherex_download_frames.py
+├── spherex_download_fits.py
 └── spherex_data/                  # created automatically
 ```
 
@@ -42,7 +42,7 @@ Open <http://127.0.0.1:8765/spherex_local_png_viewer.html> and keep the terminal
 For RA `269.45208` and Dec `4.69336`, the downloader is run with the equivalent of:
 
 ```bash
-python spherex_download_frames.py \
+python spherex_download_fits.py \
   --ra 269.45208 \
   --dec 4.69336 \
   --out "./spherex_data/ra_269.45208_dec_+4.69336"

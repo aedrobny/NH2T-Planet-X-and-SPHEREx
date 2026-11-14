@@ -12,7 +12,7 @@ from urllib.parse import unquote, urlparse
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "spherex_data"
-DOWNLOADER = ROOT / "spherex_download_frames.py"
+DOWNLOADER = ROOT / "spherex_download_fits.py"
 HOST, PORT = "127.0.0.1", 8765
 LOCK = threading.Lock()
 JOBS: set[str] = set()
@@ -127,6 +127,6 @@ if __name__ == "__main__":
     if not DOWNLOADER.is_file():
         raise SystemExit(f"Downloader not found: {DOWNLOADER}")
     DATA.mkdir(exist_ok=True)
-    print(f"Open http://{HOST}:{PORT}/spherex_local_png_viewer.html")
+    print(f"Open http://{HOST}:{PORT}/index.html")
     print("Leave this terminal open while using the viewer. Press Ctrl+C to stop.")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

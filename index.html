@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>SPHEREx // Deep Space Scanner</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="style.css">
+    </head>
+    <body>
+        <div class="stars" aria-hidden="true"></div>
+        <div class="hud">
+            <div class="hud-block"><span class="hud-label">MET</span><span id="met" class="hud-value">T+ 00:00:00</span></div>
+            <div class="hud-block"><span class="hud-label">FRAME</span><span id="odo" class="odo-digits"><span>—</span><span class="sep">/</span><span>—</span></span></div>
+            <div class="hud-block"><span class="hud-label">TGT</span><span id="hudTarget" class="hud-value">NO TARGET</span></div>
+        </div>
+        <header class="hero">
+            <p class="eyebrow">NASA SPHEREx · MISSION CONTROL</p>
+            <h1>Deep space <em>scanner</em>.</h1>
+            <p class="lede">Select a patch of sky and explore real SPHEREx infrared observations across time.</p>
+            <section class="window search-window">
+                <div class="window-title">Target Guidance</div>
+                <form id="searchForm" class="window-body search-row">
+                    <label class="field grow"><span class="field-label">Right ascension · degrees</span><input id="ra" type="number" min="0" max="359.999999" step="any" value="269.446272" placeholder="269.45208" required></label>
+                    <label class="field grow"><span class="field-label">Declination · degrees</span><input id="dec" type="number" min="-90" max="90" step="any" value="4.768200" placeholder="4.69336" required></label>
+                    <button type="submit" class="btn btn-engage" id="go">INITIATE SCAN</button>
+                </form>
+                <div class="window-body saved-row">
+                    <span class="field-label">Saved coordinate targets</span>
+                    <div class="examples" id="pre" aria-label="Saved coordinate targets"><small>No saved coordinate targets yet.</small></div>
+                    <div id="dataset" class="dataset"></div>
+                </div>
+            </section>
+            <ol class="steps">
+                <li><span class="step-num">01</span><h3>Acquire</h3><p>Enter right ascension and declination.</p></li>
+                <li><span class="step-num">02</span><h3>Observe</h3><p>The scan downloads and processes available observations.</p></li>
+                <li><span class="step-num">03</span><h3>Explore</h3><p>Step through the image sequence or play it over time.</p></li>
+            </ol>
+        </header>
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+        <main class="layout">
+            <section class="window viewer-window">
+                <div class="window-title">SPHEREx Imaging</div>
+                <div class="window-body">
+                    <div class="readout"><span class="field-label">Observation position</span><span id="coords" class="mono">Awaiting target</span></div>
+                    <div id="stage" class="viewer">
+                        <canvas id="cv" width="576" height="576"></canvas>
+                        <canvas id="ov" width="576" height="576" class="overlay-canvas" aria-hidden="true"></canvas>
+                        <div id="hud" class="image-hud"></div>
+                        <div id="emptyState" class="empty-state"><span class="empty-sigil">✦</span><span>AWAITING IMAGE DATA</span><small>Enter coordinates and initiate a scan</small></div>
+                        <div id="msg" class="stage-message" aria-live="polite"></div>
+                    </div>
+                    <div id="bar" class="controls transport">
+                        <button id="bk" type="button" class="btn" title="Previous frame (←)">◀</button>
+                        <button id="pl" type="button" class="btn btn-play" title="Play/pause (space)">▶ Play</button>
+                        <button id="fw" type="button" class="btn" title="Next frame (→)">▶</button>
+                        <input id="sl" type="range" min="0" max="0" value="0" aria-label="Observation timeline">
+                    </div>
+                    <div class="controls secondary-controls">
+                        <span class="field-label">Timeline</span><span id="frameInfo" class="info mono">No frame loaded</span>
+                    </div>
+                    <p class="info">Use the arrow keys to step through frames, Shift + arrows to move five frames, and Space to play or pause. North is up; East is left.</p>
+                </div>
+            </section>
+            <aside class="window info-window">
+                <div class="window-title">Mission Readout</div>
+                <div class="window-body">
+                    <h3>Current frame</h3><div id="info" class="aside-copy">Awaiting first scan…</div>
+                    <h3>Scan status</h3><div id="cand" class="aside-copy">Enter coordinates and initiate a scan, or select a saved target.</div>
+                    <h3>About the data</h3><div class="aside-copy">Each frame is an actual SPHEREx observation patch. The image stretch changes visibility, not the underlying measurements. The sequence shows separate telescope observations, not continuous video.</div>
+                    <a id="fitsLink" class="link" href="#" target="_blank" rel="noopener" hidden>Download original FITS ↗</a>
+                </div>
+            </aside>
+        </main>
+        <footer class="footer">Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive and AWS Open Data.</footer>
+        <div hidden><select id="bg"><option value="curve" selected>Curved glow</option></select><select id="stretch"><option value="1.5" selected>Deep</option></select><input id="sm" type="checkbox" checked><select id="mode"><option value="raw" selected>Images</option></select><input id="stack" value="1"></div>
+        <script>
+            const $ = (id) => document.getElementById(id);
+            const S = {
+                i: 0,
+                play: null,
+                frames: [],
+                key: null,
+                poll: null,
+                hasImage: false,
+            };
+            const cv = $("cv"),
+                cx = cv.getContext("2d"),
+                ov = $("ov"),
+                oc = ov.getContext("2d");
+            function message(t) {
+                $("msg").textContent = t || "";
+                const busy =
+                    /checking|loading|starting|creating|waiting|resuming|scanning|downloading|processing|retrieving/i.test(
+                        t || "",
+                    );
+                if (busy && !S.hasImage) $("emptyState").hidden = true;
+                else if (!busy && !S.hasImage) $("emptyState").hidden = false;
+            }
+            function esc(v) {
+                return String(v ?? "").replace(
+                    /[&<>"']/g,
+                    (c) =>
+                        ({
+                            "&": "&amp;",
+                            "<": "&lt;",
+                            ">": "&gt;",
+                            '"': "&quot;",
+                            "'": "&#39;",
+                        })[c],
+                );
+            }
+            function parseCSV(text) {
+                const rows = [];
+                let row = [],
+                    cell = "",
+                    quoted = false;
+                for (let i = 0; i < text.length; i++) {
+                    const c = text[i];
+                    if (quoted) {
+                        if (c === '"' && text[i + 1] === '"') {
+                            cell += '"';
+                            i++;
+                        } else if (c === '"') quoted = false;
+                        else cell += c;
+                    } else if (c === '"') quoted = true;
+                    else if (c === ",") {
+                        row.push(cell);
+                        cell = "";
+                    } else if (c === "\n") {
+                        row.push(cell);
+                        rows.push(row);
+                        row = [];
+                        cell = "";
+                    } else if (c !== "\r") cell += c;
+                }
+                if (cell.length || row.length) {
+                    row.push(cell);
+                    rows.push(row);
+                }
+                const headers = rows.shift() || [];
+                return rows
+                    .filter((r) => r.length)
+                    .map((r) => Object.fromEntries(headers.map((h, i) => [h, r[i] ?? ""])));
+            }
+            async function api(url, opts = {}) {
+                const r = await fetch(url, { cache: "no-store", ...opts });
+                const data = await r.json();
+                if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+                return data;
+            }
+            function stopPlay() {
+                if (S.play) {
+                    clearInterval(S.play);
+                    S.play = null;
+                    $("pl").textContent = "▶ Play";
+                }
+            }
+            function renderTargets(items) {
+                const host = $("pre");
+                host.innerHTML = "";
+                if (!items.length) {
+                    host.innerHTML = "<small>No saved coordinate targets yet.</small>";
+                    return;
+                }
+                for (const t of items) {
+                    const b = document.createElement("button");
+                    b.type = "button";
+                    b.textContent = `${Number(t.ra ?? t.key.match(/^ra_([0-9.]+)/)?.[1]).toFixed(5)}, ${Number(t.dec ?? t.key.match(/_dec_([+-][0-9.]+)/)?.[1]).toFixed(5)} · ${t.status.replaceAll("_", " ")} · ${t.frame_count} frames`;
+                    b.title = t.key;
+                    b.onclick = () => {
+                        const m = t.key.match(/^ra_([0-9.]+)_dec_([+-][0-9.]+)$/);
+                        if (m) {
+                            $("ra").value = m[1];
+                            $("dec").value = m[2];
+                            loadOrScan(Number(m[1]), Number(m[2]));
+                        }
+                    };
+                    host.appendChild(b);
+                }
+            }
+            async function refreshTargets() {
+                try {
+                    const d = await api("/api/targets");
+                    renderTargets(d.targets);
+                } catch (e) {
+                    message("Could not reach the SPHEREx server: " + e.message);
+                }
+            }
+            async function loadTarget(key) {
+                const info = await api("/api/target/" + encodeURIComponent(key));
+                if (info.status !== "ready")
+                    throw new Error(
+                        info.status === "needs_processing"
+                            ? "Saved FITS files found; processing is incomplete."
+                            : "No processed frames are available yet.",
+                    );
+                const csv = await fetch(info.index_url, { cache: "no-store" });
+                if (!csv.ok) throw new Error("Frame index CSV could not be read.");
+                S.frames = parseCSV(await csv.text())
+                    .map((x) => ({ ...x, file: x.frame_file || x.file }))
+                    .filter((x) => x.file);
+                if (!S.frames.length)
+                    throw new Error("The frame index contains no PNG frames.");
+                S.key = key;
+                S.i = 0;
+                stopPlay();
+                $("sl").min = 0;
+                $("sl").max = S.frames.length - 1;
+                $("sl").value = 0;
+                $("dataset").textContent =
+                    `${S.frames.length} local PNG frames · ${info.fits_count} FITS files · ${key}`;
+                $("cand").textContent =
+                    "Showing processed SPHEREx PNG observations from this saved coordinate target.";
+                paintFrame();
+            }
+            function dateOf(f) {
+                const d = new Date((f.observation || "").replace(" ", "T") + "Z");
+                return isNaN(d)
+                    ? f.observation || "Unknown"
+                    : d.toISOString().replace("T", " ").replace("Z", " UTC");
+            }
+            function paintFrame() {
+                const f = S.frames[S.i];
+                if (!f) return;
+                message("Loading " + f.file + "…");
+                const img = new Image();
+                img.onload = () => {
+                    S.hasImage = true;
+                    $("emptyState").hidden = true;
+                    cx.clearRect(0, 0, cv.width, cv.height);
+                    cx.fillStyle = "#000";
+                    cx.fillRect(0, 0, cv.width, cv.height);
+                    const scale = Math.min(cv.width / img.width, cv.height / img.height);
+                    const w = img.width * scale,
+                        h = img.height * scale;
+                    cx.drawImage(img, (cv.width - w) / 2, (cv.height - h) / 2, w, h);
+                    $("hud").textContent =
+                        `Frame ${S.i + 1}/${S.frames.length} · ${(f.observation || "").replace("T", " ").slice(0, 19)} UTC`;
+                    $("info").innerHTML =
+                        `Date: ${esc(dateOf(f))}<br>PNG: ${esc(f.file)}<br>Original FITS: ${esc(f.fits_file)}<br>Observation center: RA ${esc(f.ra || "—")}°, Dec ${esc(f.dec || "—")}°<br>Collection: ${esc(f.collection || "SPHEREx")}`;
+                    $("sl").value = S.i;
+                    $("sl").max = S.frames.length - 1;
+                    message("");
+                    oc.clearRect(0, 0, ov.width, ov.height);
+                };
+                img.onerror = () => {
+                    S.hasImage = false;
+                    $("emptyState").hidden = false;
+                    message(`Could not load ${f.file}. Check the target's frames folder.`);
+                };
+                img.src = `/spherex_data/${encodeURIComponent(S.key)}/frames/${encodeURIComponent(f.file)}?v=${Date.now()}`;
+            }
+            function go(delta) {
+                if (!S.frames.length) return;
+                S.i = Math.max(0, Math.min(S.frames.length - 1, S.i + delta));
+                paintFrame();
+            }
+            $("bk").onclick = () => go(-1);
+            $("fw").onclick = () => go(1);
+            $("sl").oninput = (e) => {
+                S.i = Number(e.target.value);
+                paintFrame();
+            };
+            $("pl").onclick = () => {
+                if (S.play) {
+                    stopPlay();
+                    return;
+                }
+                if (!S.frames.length) return;
+                if (S.i >= S.frames.length - 1) S.i = -1;
+                S.play = setInterval(() => {
+                    if (S.i >= S.frames.length - 1) {
+                        stopPlay();
+                        return;
+                    }
+                    go(1);
+                }, 600);
+                $("pl").textContent = "❚❚ Pause";
+            };
+            async function loadOrScan(ra, dec) {
+                stopPlay();
+                message("Checking saved coordinate library…");
+                $("cand").textContent =
+                    "Checking whether this coordinate already has downloaded or processed data.";
+                const key = `ra_${ra.toFixed(5)}_dec_${dec >= 0 ? "+" : ""}${dec.toFixed(5)}`;
+                try {
+                    let existing;
+                    try {
+                        existing = await api("/api/target/" + encodeURIComponent(key));
+                    } catch (e) {
+                        if (!String(e.message).includes("not found")) throw e;
+                    }
+                    if (existing?.status === "ready") {
+                        await loadTarget(key);
+                        message("Loaded existing saved target.");
+                        await refreshTargets();
+                        return;
+                    }
+                    if (existing?.status === "running") {
+                        message("This target is already scanning. Waiting for completion…");
+                        await waitForTarget(key);
+                        return;
+                    }
+                    if (existing?.status === "needs_processing")
+                        message("Existing FITS data found. Resuming download/processing…");
+                    else message("Creating coordinate folder and starting SPHEREx scan…");
+                    await api("/api/scan", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ ra, dec }),
+                    });
+                    await refreshTargets();
+                    await waitForTarget(key);
+                } catch (e) {
+                    message("Scan/load failed: " + e.message);
+                    $("cand").textContent = "Check the service logs for details.";
+                }
+            }
+            async function waitForTarget(key) {
+                if (S.poll) clearInterval(S.poll);
+                const check = async () => {
+                    try {
+                        const d = await api("/api/target/" + encodeURIComponent(key));
+                        message(
+                            `SPHEREx ${d.status.replaceAll("_", " ")} · ${d.fits_count} FITS · ${d.frame_count} PNG frames`,
+                        );
+                        await refreshTargets();
+                        if (d.status === "ready") {
+                            clearInterval(S.poll);
+                            S.poll = null;
+                            await loadTarget(key);
+                            message("Scan complete. Target loaded.");
+                        } else if (d.status === "error") {
+                            clearInterval(S.poll);
+                            S.poll = null;
+                            message("Scan failed. Check the service logs for details.");
+                        }
+                    } catch (e) {
+                        message(e.message);
+                    }
+                };
+                await check();
+                if (!S.poll) S.poll = setInterval(check, 2000);
+            }
+            $("go").onclick = () => {
+                const ra = Number($("ra").value),
+                    dec = Number($("dec").value);
+                if (!Number.isFinite(ra) || !Number.isFinite(dec)) {
+                    message("Enter valid numeric RA and Dec values.");
+                    return;
+                }
+                if (ra < 0 || ra >= 360 || dec < -90 || dec > 90) {
+                    message("RA must be 0–less than 360; Dec must be −90 to +90.");
+                    return;
+                }
+                loadOrScan(ra, dec);
+            };
+            window.addEventListener("keydown", (e) => {
+                if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+                if (e.key === "ArrowRight") {
+                    go(e.shiftKey ? 5 : 1);
+                    e.preventDefault();
+                } else if (e.key === "ArrowLeft") {
+                    go(e.shiftKey ? -5 : -1);
+                    e.preventDefault();
+                } else if (e.key === " ") {
+                    e.preventDefault();
+                    $("pl").click();
+                }
+            });
+            $("ra").readOnly = false;
+            $("dec").readOnly = false;
+            $("pre").hidden = false;
+            $("sl").min = 0;
+            $("sl").max = 0;
+            $("sl").value = 0;
+            $("dataset").textContent =
+                "Saved targets are discovered from spherex_data when the local server starts.";
+            $("cand").textContent =
+                "Enter coordinates and initiate a scan, or select an existing target above.";
+            refreshTargets();
+
+            $("searchForm").addEventListener("submit", (e) => {
+                e.preventDefault();
+                $("go").click();
+            });
+
+            // Mission HUD: elapsed time, frame odometer, and active target.
+            (function () {
+                const met = $("met"),
+                    odo = $("odo"),
+                    coords = $("coords"),
+                    info = $("frameInfo"),
+                    ra = $("ra"),
+                    dec = $("dec"),
+                    hudTarget = $("hudTarget");
+                const pad = (n) => String(n).padStart(2, "0");
+                let start = Date.now(),
+                    lastKey = "";
+                function setOdo(value) {
+                    odo.innerHTML = "";
+                    for (const ch of value) {
+                        const s = document.createElement("span");
+                        s.textContent = ch;
+                        if (ch === "/") s.className = "sep";
+                        odo.append(s);
+                    }
+                }
+                setInterval(() => {
+                    const key = S.key || "";
+                    if (key !== lastKey) {
+                        lastKey = key;
+                        start = Date.now();
+                        hudTarget.textContent = key
+                            ? `${Number(ra.value).toFixed(3)}, ${Number(dec.value).toFixed(3)}`
+                            : "NO TARGET";
+                    }
+                    const seconds = Math.floor((Date.now() - start) / 1000);
+                    met.textContent = `T+ ${pad(Math.floor(seconds / 3600))}:${pad(Math.floor(seconds / 60) % 60)}:${pad(seconds % 60)}`;
+                    setOdo(
+                        S.frames.length
+                            ? `${String(S.i + 1).padStart(2, "0")}/${String(S.frames.length).padStart(2, "0")}`
+                            : "--/--",
+                    );
+                    if (S.frames.length) {
+                        const f = S.frames[S.i];
+                        coords.textContent = `RA ${Number(f.ra || ra.value).toFixed(5)}° · DEC ${Number(f.dec || dec.value).toFixed(5)}°`;
+                        info.textContent = `FRAME ${S.i + 1} / ${S.frames.length} · ${(f.observation || "").replace("T", " ").slice(0, 19)} UTC`;
+                    }
+                }, 250);
+            })();
+        </script>
+    </body>
+</html>
