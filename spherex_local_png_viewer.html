@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>SPHEREx // Deep Space Scanner</title>
+        <style>
+            :root {
+                color-scheme: dark;
+                --bg: #050b16;
+                --panel: #0b1929;
+                --panel2: #10243a;
+                --line: #1e3b55;
+                --text: #e5f3ff;
+                --muted: #9bb8ca;
+                --cyan: #68d9f4;
+                --amber: #ffbd69;
+                --violet: #a9a0ff;
+            }
+            * {
+                box-sizing: border-box;
+            }
+            html,
+            body {
+                margin: 0;
+                min-height: 100%;
+                background: radial-gradient(
+                    ellipse at 50% -15%,
+                    #12304b 0,
+                    #071323 42%,
+                    var(--bg) 78%
+                );
+                color: var(--text);
+                font:
+                    14px/1.5 Inter,
+                    ui-sans-serif,
+                    system-ui,
+                    -apple-system,
+                    sans-serif;
+            }
+            header {
+                padding: 22px clamp(14px, 3vw, 38px) 18px;
+                border-bottom: 1px solid #18344b;
+                background: linear-gradient(180deg, #0b1b2de8, #071321e8);
+            }
+            .brand {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin-bottom: 5px;
+            }
+            .sigil {
+                width: 38px;
+                height: 38px;
+                border: 1px solid #2d6981;
+                border-radius: 50%;
+                display: grid;
+                place-items: center;
+                color: var(--cyan);
+                font-size: 21px;
+                box-shadow: 0 0 22px #4cc9ef22;
+            }
+            h1 {
+                font-size: clamp(19px, 2vw, 25px);
+                letter-spacing: 0.08em;
+                margin: 0;
+                font-weight: 750;
+            }
+            .kicker {
+                font-size: 10px;
+                letter-spacing: 0.22em;
+                color: var(--cyan);
+                font-weight: 700;
+            }
+            .subtitle {
+                color: var(--muted);
+                margin: 2px 0 18px;
+                font-size: 13px;
+            }
+            .controls-top {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(150px, 220px)) auto minmax(
+                        210px,
+                        1fr
+                    );
+                gap: 10px;
+                align-items: end;
+            }
+            label {
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+                font-size: 10px;
+                letter-spacing: 0.12em;
+                color: #a7c4d5;
+                text-transform: uppercase;
+            }
+            input,
+            select,
+            button {
+                background: #0c2033;
+                color: var(--text);
+                border: 1px solid #29475e;
+                border-radius: 8px;
+                padding: 10px 11px;
+                font: inherit;
+                min-width: 0;
+            }
+            input:focus,
+            select:focus,
+            button:focus {
+                outline: 2px solid #68d9f477;
+                outline-offset: 1px;
+            }
+            input {
+                width: 100%;
+            }
+            button {
+                cursor: pointer;
+            }
+            button:hover {
+                border-color: var(--cyan);
+            }
+            button.go {
+                background: linear-gradient(135deg, #75e2f3, #40a8d0);
+                color: #04121e;
+                border: 0;
+                font-weight: 800;
+                letter-spacing: 0.05em;
+                padding: 11px 17px;
+            }
+            .pre {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 7px;
+                margin-top: 12px;
+            }
+            .pre button {
+                font-size: 11px;
+                padding: 6px 10px;
+                background: #0d2032;
+            }
+            .pre small {
+                color: var(--muted);
+            }
+            .scanline {
+                display: grid;
+                grid-template-columns: minmax(260px, 1fr) minmax(300px, 1.15fr);
+                gap: 12px;
+                margin-top: 14px;
+            }
+            .module {
+                background: #0a1a2b;
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                padding: 12px 14px;
+            }
+            .module-head {
+                font-size: 10px;
+                letter-spacing: 0.16em;
+                color: var(--cyan);
+                font-weight: 750;
+                margin-bottom: 8px;
+            }
+            .selector-row {
+                display: flex;
+                gap: 10px;
+                align-items: end;
+            }
+            .selector-row label {
+                flex: 1;
+            }
+            .selector-row select {
+                width: 100%;
+            }
+            .range-copy {
+                color: var(--muted);
+                font-size: 12px;
+                margin-top: 8px;
+                min-height: 38px;
+            }
+            .range-copy strong {
+                color: #e2f6ff;
+            }
+            .dataset {
+                color: var(--muted);
+                font-size: 11px;
+                margin-top: 10px;
+                min-height: 18px;
+                overflow-wrap: anywhere;
+            }
+            main {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) 310px;
+                gap: 14px;
+                padding: 18px clamp(12px, 3vw, 36px) 30px;
+                max-width: 1600px;
+                margin: auto;
+            }
+            #stage {
+                position: relative;
+                background: #000;
+                border: 1px solid #24435a;
+                border-radius: 12px;
+                aspect-ratio: 1;
+                max-height: 78vh;
+                margin: auto;
+                width: 100%;
+                overflow: hidden;
+                box-shadow: 0 12px 50px #0007;
+            }
+            canvas {
+                width: 100%;
+                height: 100%;
+                display: block;
+                image-rendering: auto;
+                border-radius: 12px;
+            }
+            #hud {
+                position: absolute;
+                left: 12px;
+                top: 10px;
+                font-size: 12px;
+                color: #fff;
+                text-shadow: 0 0 4px #000;
+                pointer-events: none;
+            }
+            #msg {
+                position: absolute;
+                inset: auto 12px 10px 12px;
+                font-size: 12px;
+                color: var(--amber);
+                text-shadow: 0 0 4px #000;
+            }
+            aside {
+                background: linear-gradient(180deg, #0c1d30, #091625);
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                padding: 15px;
+                font-size: 13px;
+                height: max-content;
+            }
+            aside h3 {
+                margin: 13px 0 5px;
+                font-size: 11px;
+                letter-spacing: 0.13em;
+                color: var(--cyan);
+                text-transform: uppercase;
+            }
+            aside h3:first-child {
+                margin-top: 0;
+            }
+            .m {
+                color: var(--muted);
+            }
+            .row {
+                border: 1px solid var(--line);
+                border-radius: 7px;
+                padding: 5px 8px;
+                margin: 5px 0;
+            }
+            #bar {
+                display: flex;
+                gap: 8px;
+                margin-top: 10px;
+                align-items: center;
+            }
+            #bar button {
+                padding: 8px 12px;
+            }
+            #bar input[type="range"] {
+                flex: 1;
+                width: auto;
+                padding: 0;
+                accent-color: var(--cyan);
+            }
+            .hint {
+                font-size: 12px;
+                color: var(--muted);
+                margin: 8px 0 0;
+            }
+            .advanced {
+                margin-top: 12px;
+            }
+            .advanced summary {
+                cursor: pointer;
+                color: #9bb8ca;
+                font-size: 12px;
+            }
+            .advanced-grid {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                align-items: end;
+                padding-top: 10px;
+            }
+            .advanced-grid label {
+                min-width: 120px;
+            }
+            .advanced-grid input,
+            .advanced-grid select {
+                width: 145px;
+            }
+            .advanced-grid input[type="checkbox"] {
+                width: auto;
+            }
+            .mission-note {
+                display: flex;
+                gap: 12px;
+                align-items: center;
+                flex-wrap: wrap;
+                margin-top: 12px;
+                color: var(--muted);
+                font-size: 12px;
+            }
+            .pill {
+                display: inline-block;
+                border: 1px solid #2c536c;
+                border-radius: 999px;
+                padding: 3px 8px;
+                color: #9bd9e9;
+                font-size: 10px;
+                letter-spacing: 0.08em;
+            }
+            @media (max-width: 900px) {
+                main {
+                    grid-template-columns: 1fr;
+                }
+                .scanline {
+                    grid-template-columns: 1fr;
+                }
+                .controls-top {
+                    grid-template-columns: 1fr 1fr;
+                }
+                .controls-top .go {
+                    grid-column: 1/-1;
+                }
+                .controls-top .name-search {
+                    grid-column: 1/-1;
+                }
+            }
+            @media (max-width: 520px) {
+                .controls-top {
+                    grid-template-columns: 1fr 1fr;
+                }
+                .selector-row {
+                    align-items: stretch;
+                    flex-direction: column;
+                }
+                .brand {
+                    align-items: flex-start;
+                }
+            }
+        </style></head><body>
+        <header>
+            <div class="brand"><div class="sigil">✦</div><div><div class="kicker">MISSION CONTROL · SPECTRAL OBSERVATION MODE</div><h1>SPHEREx // DEEP SPACE SCANNER</h1></div></div>
+            <p class="subtitle">Tune into the infrared universe. Choose a sky position and explore how its light changes over time.</p>
+            <div class="controls-top">
+                <label>Right ascension · degrees<input id="ra" placeholder="e.g. 269.45208" aria-label="Right ascension in degrees" inputmode="decimal"></label>
+                <label>Declination · degrees<input id="dec" placeholder="e.g. 4.69336" aria-label="Declination in degrees" inputmode="decimal"></label>
+                <button class="go" id="go">⌁ INITIATE SCAN</button>
+  
+            </div>
+            <div class="mission-note"><span class="pill">FIXED OBSERVATION MODE · D4</span><span>2.42–3.82 µm · warm infrared</span><span>Same detector and processing for every target</span></div>
+            <div class="pre" id="pre" aria-label="Example targets"></div>
+            <div hidden><div id="dataset"></div><select id="bg"><option value="curve" selected>Curved glow</option></select><select id="stretch"><option value="1.5" selected>Deep</option></select><input id="sm" type="checkbox" checked><select id="mode"><option value="raw" selected>Images</option></select><input id="stack" value="1"></div>
+        </header>
+        <main>
+            <section><div id="stage"><canvas id="cv" width="576" height="576"></canvas><canvas id="ov" width="576" height="576" style="position:absolute;inset:0;pointer-events:none;image-rendering:auto"></canvas><div id="hud"></div><div id="msg"></div></div>
+                <div id="bar"><button id="bk">◀</button><button id="pl">▶ Play</button><button id="fw">▶</button><input id="sl" type="range" min="0" max="0" value="0" aria-label="Observation timeline"></div>
+                <p class="hint">Enter sky coordinates and initiate the scan, or select a previously saved target. Step through observation dates or play the sequence. Keys: ← → step · Shift + arrows = 5 frames · Space = play. North is up; East is left.</p></section>
+            <aside>
+                <h3>What are you tuning into?</h3><div class="m">Infrared light is invisible to human eyes. Different wavelength ranges reveal different features of the same sky: stars, cooler objects, warm dust, and molecular emission. This viewer is locked to D4 so every target is examined with the same infrared detector.</div>
+                <h3>Current frame</h3><div id="info" class="m">Awaiting first scan…</div>
+                <h3>Possible changes to inspect</h3><div id="cand" class="m">Load a sky patch to begin.</div>
+                <h3>Reading the images</h3><div class="m">Each frame is an actual SPHEREx observation patch. The image stretch changes visibility, not the underlying measurements. Green, orange, and magenta markers are investigation aids—not confirmed moving-object detections. Every frame uses D4. The image sequence shows separate observations, not continuous video from the telescope.</div>
+            </aside>
+        </main>
+        <script>
+            const $ = (id) => document.getElementById(id);
+            const S = { i: 0, play: null, frames: [], key: null, poll: null };
+            const cv = $("cv"),
+                cx = cv.getContext("2d"),
+                ov = $("ov"),
+                oc = ov.getContext("2d");
+            function message(t) {
+                $("msg").textContent = t || "";
+            }
+            function esc(v) {
+                return String(v ?? "").replace(
+                    /[&<>"']/g,
+                    (c) =>
+                        ({
+                            "&": "&amp;",
+                            "<": "&lt;",
+                            ">": "&gt;",
+                            '"': "&quot;",
+                            "'": "&#39;",
+                        })[c],
+                );
+            }
+            function parseCSV(text) {
+                const rows = [];
+                let row = [],
+                    cell = "",
+                    quoted = false;
+                for (let i = 0; i < text.length; i++) {
+                    const c = text[i];
+                    if (quoted) {
+                        if (c === '"' && text[i + 1] === '"') {
+                            cell += '"';
+                            i++;
+                        } else if (c === '"') quoted = false;
+                        else cell += c;
+                    } else if (c === '"') quoted = true;
+                    else if (c === ",") {
+                        row.push(cell);
+                        cell = "";
+                    } else if (c === "\n") {
+                        row.push(cell);
+                        rows.push(row);
+                        row = [];
+                        cell = "";
+                    } else if (c !== "\r") cell += c;
+                }
+                if (cell.length || row.length) {
+                    row.push(cell);
+                    rows.push(row);
+                }
+                const headers = rows.shift() || [];
+                return rows
+                    .filter((r) => r.length)
+                    .map((r) => Object.fromEntries(headers.map((h, i) => [h, r[i] ?? ""])));
+            }
+            async function api(url, opts = {}) {
+                const r = await fetch(url, { cache: "no-store", ...opts });
+                const data = await r.json();
+                if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+                return data;
+            }
+            function stopPlay() {
+                if (S.play) {
+                    clearInterval(S.play);
+                    S.play = null;
+                    $("pl").textContent = "▶ Play";
+                }
+            }
+            function renderTargets(items) {
+                const host = $("pre");
+                host.innerHTML = "";
+                if (!items.length) {
+                    host.innerHTML = "<small>No saved coordinate targets yet.</small>";
+                    return;
+                }
+                for (const t of items) {
+                    const b = document.createElement("button");
+                    b.type = "button";
+                    b.textContent = `${Number(t.ra ?? t.key.match(/^ra_([0-9.]+)/)?.[1]).toFixed(5)}, ${Number(t.dec ?? t.key.match(/_dec_([+-][0-9.]+)/)?.[1]).toFixed(5)} · ${t.status.replaceAll("_", " ")} · ${t.frame_count} frames`;
+                    b.title = t.key;
+                    b.onclick = () => {
+                        const m = t.key.match(/^ra_([0-9.]+)_dec_([+-][0-9.]+)$/);
+                        if (m) {
+                            $("ra").value = m[1];
+                            $("dec").value = m[2];
+                            loadOrScan(Number(m[1]), Number(m[2]));
+                        }
+                    };
+                    host.appendChild(b);
+                }
+            }
+            async function refreshTargets() {
+                try {
+                    const d = await api("/api/targets");
+                    renderTargets(d.targets);
+                } catch (e) {
+                    message("Could not reach local SPHEREx server: " + e.message);
+                }
+            }
+            async function loadTarget(key) {
+                const info = await api("/api/target/" + encodeURIComponent(key));
+                if (info.status !== "ready")
+                    throw new Error(
+                        info.status === "needs_processing"
+                            ? "Saved FITS files found; processing is incomplete."
+                            : "No processed frames are available yet.",
+                    );
+                const csv = await fetch(info.index_url, { cache: "no-store" });
+                if (!csv.ok) throw new Error("Frame index CSV could not be read.");
+                S.frames = parseCSV(await csv.text())
+                    .map((x) => ({ ...x, file: x.frame_file || x.file }))
+                    .filter((x) => x.file);
+                if (!S.frames.length)
+                    throw new Error("The frame index contains no PNG frames.");
+                S.key = key;
+                S.i = 0;
+                stopPlay();
+                $("sl").min = 0;
+                $("sl").max = S.frames.length - 1;
+                $("sl").value = 0;
+                $("dataset").textContent =
+                    `${S.frames.length} local PNG frames · ${info.fits_count} FITS files · ${key}`;
+                $("cand").textContent =
+                    "Showing processed SPHEREx PNG observations from this saved coordinate target.";
+                paintFrame();
+            }
+            function dateOf(f) {
+                const d = new Date((f.observation || "").replace(" ", "T") + "Z");
+                return isNaN(d)
+                    ? f.observation || "Unknown"
+                    : d.toISOString().replace("T", " ").replace("Z", " UTC");
+            }
+            function paintFrame() {
+                const f = S.frames[S.i];
+                if (!f) return;
+                message("Loading " + f.file + "…");
+                const img = new Image();
+                img.onload = () => {
+                    cx.clearRect(0, 0, cv.width, cv.height);
+                    cx.fillStyle = "#000";
+                    cx.fillRect(0, 0, cv.width, cv.height);
+                    const scale = Math.min(cv.width / img.width, cv.height / img.height);
+                    const w = img.width * scale,
+                        h = img.height * scale;
+                    cx.drawImage(img, (cv.width - w) / 2, (cv.height - h) / 2, w, h);
+                    $("hud").textContent =
+                        `Frame ${S.i + 1}/${S.frames.length} · ${(f.observation || "").replace("T", " ").slice(0, 19)} UTC`;
+                    $("info").innerHTML =
+                        `Date: ${esc(dateOf(f))}<br>PNG: ${esc(f.file)}<br>Original FITS: ${esc(f.fits_file)}<br>Observation center: RA ${esc(f.ra || "—")}°, Dec ${esc(f.dec || "—")}°<br>Collection: ${esc(f.collection || "SPHEREx")}`;
+                    $("sl").value = S.i;
+                    $("sl").max = S.frames.length - 1;
+                    message("");
+                    oc.clearRect(0, 0, ov.width, ov.height);
+                };
+                img.onerror = () =>
+                    message(`Could not load ${f.file}. Check the target's frames folder.`);
+                img.src = `/spherex_data/${encodeURIComponent(S.key)}/frames/${encodeURIComponent(f.file)}?v=${Date.now()}`;
+            }
+            function go(delta) {
+                if (!S.frames.length) return;
+                S.i = Math.max(0, Math.min(S.frames.length - 1, S.i + delta));
+                paintFrame();
+            }
+            $("bk").onclick = () => go(-1);
+            $("fw").onclick = () => go(1);
+            $("sl").oninput = (e) => {
+                S.i = Number(e.target.value);
+                paintFrame();
+            };
+            $("pl").onclick = () => {
+                if (S.play) {
+                    stopPlay();
+                    return;
+                }
+                if (!S.frames.length) return;
+                if (S.i >= S.frames.length - 1) S.i = -1;
+                S.play = setInterval(() => {
+                    if (S.i >= S.frames.length - 1) {
+                        stopPlay();
+                        return;
+                    }
+                    go(1);
+                }, 600);
+                $("pl").textContent = "❚❚ Pause";
+            };
+            async function loadOrScan(ra, dec) {
+                stopPlay();
+                message("Checking saved coordinate library…");
+                $("cand").textContent =
+                    "Checking whether this coordinate already has downloaded or processed data.";
+                const key = `ra_${ra.toFixed(5)}_dec_${dec >= 0 ? "+" : ""}${dec.toFixed(5)}`;
+                try {
+                    let existing;
+                    try {
+                        existing = await api("/api/target/" + encodeURIComponent(key));
+                    } catch (e) {
+                        if (!String(e.message).includes("not found")) throw e;
+                    }
+                    if (existing?.status === "ready") {
+                        await loadTarget(key);
+                        message("Loaded existing saved target.");
+                        await refreshTargets();
+                        return;
+                    }
+                    if (existing?.status === "running") {
+                        message("This target is already scanning. Waiting for completion…");
+                        await waitForTarget(key);
+                        return;
+                    }
+                    if (existing?.status === "needs_processing")
+                        message("Existing FITS data found. Resuming download/processing…");
+                    else message("Creating coordinate folder and starting SPHEREx scan…");
+                    await api("/api/scan", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ ra, dec }),
+                    });
+                    await refreshTargets();
+                    await waitForTarget(key);
+                } catch (e) {
+                    message("Scan/load failed: " + e.message);
+                    $("cand").textContent =
+                        "Check the local server terminal and the target download.log for details.";
+                }
+            }
+            async function waitForTarget(key) {
+                if (S.poll) clearInterval(S.poll);
+                const check = async () => {
+                    try {
+                        const d = await api("/api/target/" + encodeURIComponent(key));
+                        message(
+                            `SPHEREx ${d.status.replaceAll("_", " ")} · ${d.fits_count} FITS · ${d.frame_count} PNG frames`,
+                        );
+                        await refreshTargets();
+                        if (d.status === "ready") {
+                            clearInterval(S.poll);
+                            S.poll = null;
+                            await loadTarget(key);
+                            message("Scan complete. Target loaded.");
+                        } else if (d.status === "error") {
+                            clearInterval(S.poll);
+                            S.poll = null;
+                            message(
+                                "Scan failed. Open download.log in " +
+                                    key +
+                                    " for details.",
+                            );
+                        }
+                    } catch (e) {
+                        message(e.message);
+                    }
+                };
+                await check();
+                if (!S.poll) S.poll = setInterval(check, 2000);
+            }
+            $("go").onclick = () => {
+                const ra = Number($("ra").value),
+                    dec = Number($("dec").value);
+                if (!Number.isFinite(ra) || !Number.isFinite(dec)) {
+                    message("Enter valid numeric RA and Dec values.");
+                    return;
+                }
+                if (ra < 0 || ra >= 360 || dec < -90 || dec > 90) {
+                    message("RA must be 0–less than 360; Dec must be −90 to +90.");
+                    return;
+                }
+                loadOrScan(ra, dec);
+            };
+            window.addEventListener("keydown", (e) => {
+                if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+                if (e.key === "ArrowRight") {
+                    go(e.shiftKey ? 5 : 1);
+                    e.preventDefault();
+                } else if (e.key === "ArrowLeft") {
+                    go(e.shiftKey ? -5 : -1);
+                    e.preventDefault();
+                } else if (e.key === " ") {
+                    e.preventDefault();
+                    $("pl").click();
+                }
+            });
+            $("ra").readOnly = false;
+            $("dec").readOnly = false;
+            $("pre").hidden = false;
+            $("sl").min = 0;
+            $("sl").max = 0;
+            $("sl").value = 0;
+            $("dataset").textContent =
+                "Saved targets are discovered from spherex_data when the local server starts.";
+            $("cand").textContent =
+                "Enter coordinates and initiate a scan, or select an existing target above.";
+            refreshTargets();
+        </script></body></html>
