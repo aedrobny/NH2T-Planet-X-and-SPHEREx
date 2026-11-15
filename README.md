@@ -105,13 +105,13 @@ flowchart LR
 
 ## What's next
 
-The prototype gets real SPHEREx frames in front of anyone. Next we want to make the sky easier to find and easier to understand, using a large language model (LLM):
+The prototype gets real SPHEREx frames in front of anyone. Next we want to make the sky easier to find and easier to understand, naming stars and large bodies and improving user quality.
 
-- **Search by name.** Type "Barnard's Star" and the tool works out the coordinates, so nobody needs to know RA and Dec.
-- **Plain-language descriptions.** The LLM writes a short, friendly description of the patch of sky you're viewing and what to look for.
-- **Name the objects in view.** The LLM identifies the stars and other objects in the field and explains what they are.
-- **Keep the AI honest.** Names and facts would come from a real catalog (such as SIMBAD), with the model only putting them into plain language, so it never has to guess.
-- **Multiple Viewpoints/Sharing.** Ability to open multiple windows for viewing, shrink windows, as well as share a link with peers for specific coordinates.
+- **Search by name.** Look up stars, galaxies and other objects by name, and show star and constellation names in the view, so nobody needs to know coordinates.
+- **More data from other missions.** Options to view Gaia and WISE data alongside SPHEREx.
+- **Motion highlighting.** Mark anything that shifts between observations so movers stand out.
+- **Shareable links.** Put the coordinates in the URL so you can send an exact view to someone.
+- **Resizable windows.** Drag, shrink and enlarge panels to build your own layout.
 
 ## Data and credits
 
@@ -119,7 +119,7 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 
 ## AI usage
 
-- **In the product:** none yet. The current prototype shows real SPHEREx data with no AI-generated content. LLM features are planned (see [What's next](#whats-next)).
+- **In the product:** none yet. The current prototype shows real SPHEREx data with no AI-generated content.
 - **In development:** Used AI to proofread and assist with debugging code.
 - When AI descriptions are added (in the future), we'll label them as AI-generated, because they are a starting point and not a verified scientific result.
 
