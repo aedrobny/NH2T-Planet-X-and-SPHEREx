@@ -149,11 +149,53 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 | EJ Mabanto | Head Data Scientist/AI Specialist, Asst. Software/Hardware Developer |
 | Elliot | Co Subject Matter Expert |
 
+---
+
 ## Run it locally
 
+### Requirements
+- Python 3
+- macOS or Linux
+- Internet connection to retrieve SPHEREx observations
+
+### 1. Clone the repository
+
 ```bash
-[commands to install and run]
+git clone https://github.com/aedrobny/NH2T-Planet-X-and-SPHEREx.git
+cd NH2T-Planet-X-and-SPHEREx
 ```
+
+### 2. Create and activate a virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Install the required Python packages
+```bash
+python -m pip install --upgrade pip
+python -m pip install astroquery astropy numpy requests imageio matplotlib pillow
+```
+
+### 4. Start the local server
+```bash
+python spherex_server.py
+```
+Keep the terminal running while using the application.
+
+### 5. Open the website
+
+Visit: http://127.0.0.1:8000/index.html
+
+### 6. Start exploring
+1. Enter right ascension (RA) and declination (Dec) in decimal degrees.
+
+2. Click INITIATE SCAN.
+
+3. The server retrieves available SPHEREx observations and processes them into PNG frames.
+
+4. Explore the observations using the playback controls.
 
 ## Acknowledgments and license
 
