@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://www.spacefinder3000.us/"><b>▶ Live demo</b></a> ·
+  <a href="https://space-finder-3000.onrender.com/"><b>▶ Live website</b></a> ·
   <a href="[video link]">30-second video</a> ·
-  <a href="[slides link]">Slides</a>
+  <a href="https://docs.google.com/presentation/d/19FWNbYBCe5dy4fP6lRDCuZEPNJt4_YItUPUjKZMTPqE/edit?usp=sharing">Slides</a>
 </p>
 
 <p align="center">
@@ -109,12 +109,9 @@ flowchart LR
 ## Honest limits
 
 - The sequence is separate observations taken at different times, not continuous video, so expect gaps between frames.
-- For now you search by coordinates only. Name search is planned (see [What's next](#whats-next)).
 - Very slow movers can shift by less than one pixel between images, so they can look like they're standing still.
 - SPHEREx sees the sky through a variable filter, so a star's brightness differs from image to image. A brightness change only means something when comparing the same band.
-- The tool shows you the images. Spotting what moved is still up to you, and we don't claim to have found Planet X or any new object.
-- The IRSA IPA occasionally bugs out/crashes and does not display data. This error is hard to work around, and we were unable to fix it at the moment.
-- [Add anything specific to your prototype, such as slow scans or limited coverage.]
+- The IRSA API occasionally bugs out/crashes and does not display data.
 
 ## What's next
 
@@ -124,9 +121,7 @@ The prototype gets real SPHEREx frames in front of anyone. Next we want to make 
 - **Plain-language descriptions.** The LLM writes a short, friendly description of the patch of sky you're viewing and what to look for.
 - **Name the objects in view.** The LLM identifies the stars and other objects in the field and explains what they are.
 - **Keep the AI honest.** Names and facts would come from a real catalog (such as SIMBAD), with the model only putting them into plain language, so it never has to guess.
-- **Multiple Viewpoints.** Ability to open multiple windows, each letting you view multiple stars side by side and display their movements.
-- **AI Assistance.** A chat bot that can give you quick directions, as many locations of any stars you want, and more.
-- [Other ideas, such as highlighting movers automatically or shareable links to a spot.]
+- **Multiple Viewpoints/Sharing.** Ability to open multiple windows for viewing, shrink windows, as well as share a link with peers for specific coordinates.
 
 ## Data and credits
 
@@ -142,12 +137,10 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 
 | Name | Role |
 |---|---|
-| Abigail Diaz | Head UI/UX/Graphic Designer, Asst. Software/Hardware Developer |
-| Addison Drobny | Head Software/Hardware Developer |
-| Azure | Co Subject Matter Specialist, Co Storyteller/Communicator |
-| Drake Cheever | Co Subject Matter Specialist, Co Storyteller/Communicator |
-| EJ Mabanto | Head Data Scientist/AI Specialist, Asst. Software/Hardware Developer |
-| Elliot | Co Subject Matter Expert |
+| Abigail Diaz | Lead UI/UX/Graphic Designer, Asst. Software/Hardware Developer |
+| Addison Drobny | Lead Software/Hardware Developer |
+| Drake Cheever | Lead Subject Matter Specialist, Lead Storyteller/Communicator |
+| EJ Mabanto | Lead Data Scientist/AI Specialist, Asst. Software/Hardware Developer |
 
 ---
 
@@ -229,4 +222,4 @@ spherex_data/
 
 Thank you to NASA, the SPHEREx team, IPAC/IRSA, and the NASA Space Apps Challenge organizers and mentors.
 
-License: Space Finder 3000
+License: NASA
