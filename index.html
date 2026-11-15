@@ -477,8 +477,11 @@
         </script>
 
         <!-- interactive sky (Aladin Lite by CDS) -->
-        <script src="aladin.js" charset="utf-8"></script>
-        <script>
+        <script type="module">
+        import A from "https://cdn.jsdelivr.net/npm/aladin-lite@3.6.5/dist/aladin.js";
+        window.A = A;
+        </script>
+        <script type=""module>
             // Sky map, scan-area marker, toolbar and mission briefing.
             (function () {
                 const el = (id) => document.getElementById(id);
