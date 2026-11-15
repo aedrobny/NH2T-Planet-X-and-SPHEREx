@@ -78,7 +78,7 @@ But there is far too much sky for one person to scan, and the data is hard to re
 <img width="728" height="282" alt="Screenshot 2026-11-15 at 2 53 49 PM" src="https://github.com/user-attachments/assets/5a3d27d1-4716-456d-985d-e64ae233a7b4" />
 
 **Images:** NASA SPHEREx data from the NASA/IPAC Infrared Science Archive (IRSA) and AWS Open Data.
-**Stack:** [languages, libraries, hosting]
+**Stack:** Python 3 (server: `spherex_server.py`) with astroquery, astropy, numpy, requests, imageio, matplotlib and pillow. Front end: HTML, CSS and JavaScript, with Aladin for sky context. Data: NASA SPHEREx via IRSA and AWS Open Data. Hosting: Render.
 
 ## What's different
 
