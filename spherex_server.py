@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import sys
+import os
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
