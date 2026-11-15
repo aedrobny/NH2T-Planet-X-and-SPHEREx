@@ -44,7 +44,8 @@
                     <div class="window-body">
                         <h3>Current frame</h3><div id="info" class="aside-copy">Awaiting first scan…</div>
                         <h3>Scan status</h3><div id="cand" class="aside-copy">Enter coordinates and initiate a scan, or select a saved target.</div>
-                        <h3>About the data</h3><div class="aside-copy">Each frame is an actual SPHEREx observation patch. The image stretch changes visibility, not the underlying measurements. The sequence shows separate telescope observations, not continuous video.</div>
+                        <h3>Moving objects</h3><div id="movers" class="aside-copy cand-list">Scan a target to search for moving objects.</div>
+                        <h3>About the data</h3><div class="aside-copy">Each frame is an actual SPHEREx observation patch, aligned north-up with flagged pixels masked. The image stretch changes visibility, not the underlying measurements. The sequence shows separate telescope observations, not continuous video.</div>
                         <a id="fitsLink" class="link" href="#" target="_blank" rel="noopener" hidden>Download original FITS ↗</a>
                     </div>
                 </aside>
@@ -71,10 +72,17 @@
                         <button id="fw" type="button" class="btn" title="Next frame (→)">▶</button>
                         <input id="sl" type="range" min="0" max="0" value="0" aria-label="Observation timeline">
                     </div>
+                    <div class="controls view-controls">
+                        <div class="segmented" role="group" aria-label="Image view">
+                            <button id="viewFrames" type="button" class="seg on" title="Aligned frames">Frames</button>
+                            <button id="viewMovers" type="button" class="seg" title="Difference frames: gray = no change (M)" disabled>Movers</button>
+                        </div>
+                        <label class="check"><input id="showTracks" type="checkbox" checked> Tracks</label>
+                    </div>
                     <div class="controls secondary-controls">
                         <span class="field-label">Timeline</span><span id="frameInfo" class="info mono">No frame loaded</span>
                     </div>
-                    <p class="info">Use the arrow keys to step through frames, Shift + arrows to move five frames, and Space to play or pause. North is up; East is left.</p>
+                    <p class="info">Arrow keys step through frames, Shift + arrows move five, Space plays or pauses, M switches between frames and movers (in movers view, gray means no change). North is up; East is left.</p>
                 </div>
             </section>
         </div>
@@ -111,8 +119,8 @@
                     <p class="lede">Select a patch of sky and explore real SPHEREx infrared observations across time.</p>
                     <ol class="steps">
                         <li><span class="step-num">01</span><h3>Acquire</h3><p>Enter right ascension and declination.</p></li>
-                        <li><span class="step-num">02</span><h3>Observe</h3><p>The scan downloads and processes available observations.</p></li>
-                        <li><span class="step-num">03</span><h3>Explore</h3><p>Step through the image sequence or play it over time.</p></li>
+                        <li><span class="step-num">02</span><h3>Observe</h3><p>The scan downloads, aligns and cleans the available observations.</p></li>
+                        <li><span class="step-num">03</span><h3>Explore</h3><p>Play the sequence, switch to Movers to subtract the still sky, and check the detected tracks.</p></li>
                     </ol>
                     <button id="guideClose" type="button" class="btn btn-engage">BEGIN</button>
                 </div>
@@ -132,11 +140,18 @@
                 hasImage: false,
                 partial: false,
                 total: 0,
+                ver: 0,            // cache version for this target's images
+                view: "frames",    // "frames" or "movers"
+                cands: null,       // candidates.json contents
+                items: [],         // tracks + pairs, in list order
+                sel: null,         // selected candidate index
+                rect: null,        // where the image sits on the canvas
             };
             const cv = $("cv"),
                 cx = cv.getContext("2d"),
                 ov = $("ov"),
                 oc = ov.getContext("2d");
+            cx.imageSmoothingEnabled = false;
             const MIN_START_FRAMES = 10;
 
             function message(t) {
@@ -225,17 +240,15 @@
                 for (const t of items) {
                     const b = document.createElement("button");
                     b.type = "button";
-                    b.textContent = b.textContent = t.display_name || t.key;
+                    b.textContent = t.display_name || t.key;
                     b.title = t.key;
                     b.onclick = () => {
                         const m = t.key.match(/^ra_([0-9.]+)_dec_([+-][0-9.]+)$/);
                         if (m) {
                             const ra = Number(m[1]);
                             const dec = Number(m[2]);
-
                             $("ra").value = ra.toString();
                             $("dec").value = dec.toString();
-
                             loadOrScan(ra, dec);
                         }
                     };
@@ -273,7 +286,7 @@
                     case "downloading":
                         return `LOADING… ${source} ${frames}`;
                     case "processing":
-                        return `FINISHING… ${frames}`;
+                        return p.message ? `${p.message.toUpperCase()} ${frames}` : `FINISHING… ${frames}`;
                     case "done":
                         return `COMPLETE · ${source} ${frames}`;
                     case "error":
@@ -294,6 +307,156 @@
                 $("loadAllBtn").hidden = true;
             }
 
+            // ---- movers view, candidate list and track overlay ----
+            function hasDiffs() {
+                return S.frames.some((f) => f.diff_file);
+            }
+            function updateViewButtons() {
+                const diffs = hasDiffs();
+                if (!diffs && S.view === "movers") S.view = "frames";
+                $("viewMovers").disabled = !diffs;
+                $("viewFrames").classList.toggle("on", S.view === "frames");
+                $("viewMovers").classList.toggle("on", S.view === "movers");
+            }
+            function setView(v) {
+                if (v === "movers" && !hasDiffs()) {
+                    message(
+                        S.partial
+                            ? "Movers view becomes available once all frames finish downloading."
+                            : "No difference frames for this target yet. Rescan it to generate them.",
+                    );
+                    return;
+                }
+                S.view = v;
+                updateViewButtons();
+                if (S.frames.length) paintFrame();
+            }
+            function frameSrc(f) {
+                const base = `/spherex_data/${encodeURIComponent(S.key)}`;
+                if (S.view === "movers" && f.diff_file)
+                    return `${base}/diffs/${encodeURIComponent(f.diff_file)}?v=${S.ver}`;
+                return `${base}/frames/${encodeURIComponent(f.file)}?v=${S.ver}`;
+            }
+            function renderCandidates() {
+                const box = $("movers");
+                box.innerHTML = "";
+                if (!S.key) {
+                    box.textContent = "Scan a target to search for moving objects.";
+                    return;
+                }
+                if (!S.cands) {
+                    box.textContent = S.partial
+                        ? "The motion search runs after all frames finish downloading."
+                        : "No motion-search results for this target yet. Rescan it to generate them.";
+                    return;
+                }
+                if (!S.items.length) {
+                    box.textContent =
+                        S.cands.note || "No moving-object candidates found here. Most patches of sky have none.";
+                    return;
+                }
+                S.items.forEach((it, n) => {
+                    const b = document.createElement("button");
+                    b.type = "button";
+                    b.className =
+                        "cand-item" +
+                        (it.type === "pair" ? " pair" : it.kind === "slow mover" ? " slow" : "") +
+                        (S.sel === n ? " on" : "");
+                    b.textContent =
+                        it.type === "track"
+                            ? `${n + 1}. ${it.kind} · ${it.speed_arcsec_per_day}″/day · ${it.points.length} frames · dir ${it.direction_deg}°`
+                            : `${n + 1}. proper motion · ${it.arcsec_per_year}″/yr · shift ${it.shift_arcsec}″`;
+                    b.title = "Click to highlight; click again to clear";
+                    b.onclick = () => selectCandidate(n);
+                    box.append(b);
+                });
+            }
+            function selectCandidate(n) {
+                S.sel = S.sel === n ? null : n;
+                const it = S.items[n];
+                if (S.sel !== null && it.type === "track") {
+                    const idx = S.frames.findIndex((f) => f.frame_file === it.points[0].frame_file);
+                    if (idx >= 0) {
+                        stopPlay();
+                        S.i = idx;
+                        paintFrame();
+                    }
+                }
+                renderCandidates();
+                drawOverlay();
+            }
+            function drawArrow(x1, y1, x2, y2) {
+                oc.beginPath();
+                oc.moveTo(x1, y1);
+                oc.lineTo(x2, y2);
+                oc.stroke();
+                const a = Math.atan2(y2 - y1, x2 - x1);
+                oc.beginPath();
+                oc.moveTo(x2, y2);
+                oc.lineTo(x2 - 10 * Math.cos(a - 0.45), y2 - 10 * Math.sin(a - 0.45));
+                oc.lineTo(x2 - 10 * Math.cos(a + 0.45), y2 - 10 * Math.sin(a + 0.45));
+                oc.closePath();
+                oc.fill();
+            }
+            function drawLabel(text, x, y, color) {
+                oc.font = "600 15px 'JetBrains Mono', monospace";
+                const w = oc.measureText(text).width;
+                const lx = Math.max(6, Math.min(x + 12, ov.width - w - 6));
+                const ly = Math.max(20, Math.min(y - 12, ov.height - 8));
+                oc.fillStyle = "rgba(0,0,0,0.65)";
+                oc.fillRect(lx - 4, ly - 15, w + 8, 20);
+                oc.fillStyle = color;
+                oc.fillText(text, lx, ly);
+            }
+            function drawOverlay() {
+                oc.clearRect(0, 0, ov.width, ov.height);
+                if (!S.cands || !S.items.length || !$("showTracks").checked || !S.rect) return;
+                const f = S.frames[S.i];
+                const R = S.rect;
+                const P = (p) => [R.x + p.fx * R.w, R.y + p.fy * R.h];
+
+                S.items.forEach((it, n) => {
+                    const selected = S.sel === n;
+                    oc.globalAlpha = S.sel !== null && !selected ? 0.3 : 1;
+                    if (it.type === "track") {
+                        const color = it.kind === "slow mover" ? "#6dff5f" : "#ffbf4d";
+                        oc.strokeStyle = color;
+                        oc.lineWidth = selected ? 2.5 : 1.5;
+                        oc.setLineDash([7, 5]);
+                        oc.beginPath();
+                        it.points.forEach((p, k) => {
+                            const [x, y] = P(p);
+                            k ? oc.lineTo(x, y) : oc.moveTo(x, y);
+                        });
+                        oc.stroke();
+                        oc.setLineDash([]);
+                        it.points.forEach((p) => {
+                            const [x, y] = P(p);
+                            const here = f && p.frame_file === f.frame_file;
+                            oc.beginPath();
+                            oc.arc(x, y, here ? 15 : 6, 0, Math.PI * 2);
+                            oc.lineWidth = here ? 2.5 : 1.2;
+                            oc.stroke();
+                        });
+                        const [lx, ly] = P(it.points[it.points.length - 1]);
+                        drawLabel(`${n + 1} · ${it.speed_arcsec_per_day}″/day`, lx, ly, color);
+                    } else {
+                        const color = "#78c8ff";
+                        const [x1, y1] = P(it.from);
+                        const [x2, y2] = P(it.to);
+                        oc.strokeStyle = color;
+                        oc.fillStyle = color;
+                        oc.lineWidth = selected ? 2.5 : 1.5;
+                        oc.beginPath();
+                        oc.arc(x1, y1, 7, 0, Math.PI * 2);
+                        oc.stroke();
+                        drawArrow(x1, y1, x2, y2);
+                        drawLabel(`${n + 1} · ${it.arcsec_per_year}″/yr`, x2, y2, color);
+                    }
+                });
+                oc.globalAlpha = 1;
+            }
+
             async function loadTarget(key, partial = false) {
                 const info = await api("/api/target/" + encodeURIComponent(key));
                 if (!partial && info.status !== "ready")
@@ -303,9 +466,8 @@
                             : "No processed frames are available yet.",
                     );
                 if (!info.index_url) throw new Error("No frame index is available yet.");
-                const csv = await fetch(info.index_url + "?v=" + Date.now(), {
-                    cache: "no-store",
-                });
+                S.ver = Date.now();
+                const csv = await fetch(info.index_url + "?v=" + S.ver, { cache: "no-store" });
                 if (!csv.ok) throw new Error("Frame index CSV could not be read.");
                 S.frames = parseCSV(await csv.text())
                     .map((x) => ({ ...x, file: x.frame_file || x.file }))
@@ -316,6 +478,26 @@
                 S.i = 0;
                 S.partial = partial;
                 S.total = info.progress?.total || S.frames.length;
+
+                // motion-search results (only after the full scan)
+                S.cands = null;
+                S.items = [];
+                S.sel = null;
+                if (!partial && info.candidates_url) {
+                    try {
+                        const r = await fetch(info.candidates_url + "?v=" + S.ver, { cache: "no-store" });
+                        if (r.ok) {
+                            S.cands = await r.json();
+                            S.items = [
+                                ...(S.cands.tracks || []).map((t) => ({ type: "track", ...t })),
+                                ...(S.cands.pairs || []).map((p) => ({ type: "pair", ...p })),
+                            ];
+                        }
+                    } catch (e) {
+                        console.warn("Could not read candidates:", e);
+                    }
+                }
+
                 stopPlay();
                 $("sl").min = 0;
                 $("sl").max = S.frames.length - 1;
@@ -327,6 +509,8 @@
                     ? "Playing the first frames while the rest download."
                     : "Showing processed SPHEREx PNG observations from this saved coordinate target.";
                 if (!partial) hideBanner();
+                updateViewButtons();
+                renderCandidates();
                 paintFrame();
             }
             function dateOf(f) {
@@ -338,7 +522,7 @@
             function paintFrame() {
                 const f = S.frames[S.i];
                 if (!f) return;
-                message("Loading " + f.file + "…");
+                if (!S.hasImage) message("Loading " + f.file + "…");
                 const img = new Image();
                 img.onload = () => {
                     S.hasImage = true;
@@ -346,25 +530,34 @@
                     cx.clearRect(0, 0, cv.width, cv.height);
                     cx.fillStyle = "#000";
                     cx.fillRect(0, 0, cv.width, cv.height);
+                    cx.imageSmoothingEnabled = false;
                     const scale = Math.min(cv.width / img.width, cv.height / img.height);
                     const w = img.width * scale,
                         h = img.height * scale;
-                    cx.drawImage(img, (cv.width - w) / 2, (cv.height - h) / 2, w, h);
+                    const x0 = (cv.width - w) / 2,
+                        y0 = (cv.height - h) / 2;
+                    cx.drawImage(img, x0, y0, w, h);
+                    S.rect = { x: x0, y: y0, w, h };
+                    const diffView = S.view === "movers" && f.diff_file;
                     $("hud").textContent =
-                        `Frame ${S.i + 1}/${S.frames.length} · ${(f.observation || "").replace("T", " ").slice(0, 19)} UTC`;
+                        `Frame ${S.i + 1}/${S.frames.length} · ${(f.observation || "").replace("T", " ").slice(0, 19)} UTC` +
+                        (diffView ? " · MOVERS" : "");
                     $("info").innerHTML =
-                        `Date: ${esc(dateOf(f))}<br>PNG: ${esc(f.file)}<br>Original FITS: ${esc(f.fits_file)}<br>Observation center: RA ${esc(f.ra || "—")}°, Dec ${esc(f.dec || "—")}°<br>Collection: ${esc(f.collection || "SPHEREx")}`;
+                        `Date: ${esc(dateOf(f))}<br>PNG: ${esc(f.file)}<br>Original FITS: ${esc(f.fits_file)}<br>Observation center: RA ${esc(f.ra || "—")}°, Dec ${esc(f.dec || "—")}°<br>Collection: ${esc(f.collection || "SPHEREx")}` +
+                        (f.masked_pixels !== undefined && f.masked_pixels !== ""
+                            ? `<br>Masked pixels: ${esc(f.masked_pixels)}${f.masked_flags && f.masked_flags !== "none" ? ` (${esc(f.masked_flags)})` : ""}`
+                            : "");
                     $("sl").value = S.i;
                     $("sl").max = S.frames.length - 1;
                     message("");
-                    oc.clearRect(0, 0, ov.width, ov.height);
+                    drawOverlay();
                 };
                 img.onerror = () => {
                     S.hasImage = false;
                     $("emptyState").hidden = false;
                     message(`Could not load ${f.file}. Check the target's frames folder.`);
                 };
-                img.src = `/spherex_data/${encodeURIComponent(S.key)}/frames/${encodeURIComponent(f.file)}?v=${Date.now()}`;
+                img.src = frameSrc(f);
             }
             function go(delta) {
                 if (!S.frames.length) return;
@@ -393,6 +586,9 @@
                 }, 600);
                 $("pl").textContent = "❚❚ Pause";
             };
+            $("viewFrames").onclick = () => setView("frames");
+            $("viewMovers").onclick = () => setView("movers");
+            $("showTracks").onchange = drawOverlay;
             $("loadAllBtn").onclick = async () => {
                 if (!S.key) return;
                 try {
@@ -413,8 +609,15 @@
                 S.i = 0;
                 S.hasImage = false;
                 S.partial = false;
+                S.cands = null;
+                S.items = [];
+                S.sel = null;
+                S.rect = null;
                 cx.clearRect(0, 0, cv.width, cv.height);
+                oc.clearRect(0, 0, ov.width, ov.height);
                 hideBanner();
+                updateViewButtons();
+                $("movers").textContent = "Waiting for scan results…";
                 $("hud").textContent = "";
                 $("info").textContent = "Awaiting scan results…";
                 $("frameInfo").textContent = "No frame loaded";
@@ -485,7 +688,7 @@
                                     button: true,
                                 });
                                 $("cand").textContent =
-                                    "Download complete. Press “Load all frames” to restart the viewer with every frame in time order.";
+                                    "Download complete. Press “Load all frames” to restart the viewer with every frame in time order, plus the movers view and detected tracks.";
                             } else {
                                 await loadTarget(key);
                                 message("Scan complete. Target loaded.");
@@ -507,9 +710,7 @@
                                 d.frame_count >= Math.min(MIN_START_FRAMES, total);
                             if (enough && S.key !== key) await loadTarget(key, true);
                             if (S.key === key && S.partial) {
-                                showBanner(
-                                    `Playing ${S.frames.length} of ${total} · ${text}`,
-                                );
+                                showBanner(`Playing ${S.frames.length} of ${total} · ${text}`);
                             } else {
                                 showBanner(text);
                                 message(text);
@@ -549,6 +750,8 @@
                 } else if (e.key === " ") {
                     e.preventDefault();
                     $("pl").click();
+                } else if (e.key === "m" || e.key === "M") {
+                    setView(S.view === "movers" ? "frames" : "movers");
                 }
             });
             $("ra").readOnly = false;

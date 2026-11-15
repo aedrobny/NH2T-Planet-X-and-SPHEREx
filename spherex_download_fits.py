@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-SPHEREx DR1 + QR3 downloader and frame maker.
+SPHEREx DR1 + QR3 downloader, frame maker and moving-object finder.
 
-Searches IRSA SIA2, then fetches detector D4 cutouts around the target:
-  - preferred: read only the needed pixels straight from NASA's public
-    AWS S3 bucket (nasa-irsa-spherex), several frames in parallel
-  - fallback: IRSA's cutout service
-
-Frames are made as soon as each file arrives, and frames_index.csv is
-kept up to date (in time order) so the viewer can start playing early.
-Live progress is written to progress.json for the web page.
+1. Searches IRSA SIA2 for detector D4 exposures covering the target.
+2. Fetches cutouts: straight from NASA's public AWS S3 bucket when possible
+   (only the needed pixels), IRSA's cutout service as a fallback.
+3. Aligns every frame onto one north-up grid centered on the target and
+   masks flagged pixels (cosmic rays, hot/bad pixels), making PNG frames as
+   files arrive so the viewer can start early.
+4. Finds moving objects: median "still sky", difference images, spots above
+   the noise, then links spots that line up in 3+ frames at steady speed.
+   Results go to candidates.json; difference frames go to diffs/.
 
 Example:
   python3 spherex_download_fits.py --ra 269.44627 --dec 4.76820
@@ -42,8 +43,12 @@ import requests
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
+from astropy.time import Time
 from astropy.wcs import WCS, FITSFixedWarning
 from astroquery.ipac.irsa import Irsa
+from PIL import Image
+from reproject import reproject_interp
+from scipy import ndimage
 import matplotlib
 matplotlib.use("Agg")
 import imageio.v2 as imageio
@@ -58,11 +63,36 @@ warnings.simplefilter("ignore", category=FITSFixedWarning)
 
 COLLECTIONS = ["spherex_dr1", "spherex_qr3"]  # DR1 first: preferred when both have an exposure
 DEEP_COLLECTIONS = ["spherex_dr1_deep", "spherex_qr3_deep"]
-USER_AGENT = "SPHEREx-local-downloader/1.2 (Python; FITS archive client)"
+USER_AGENT = "SPHEREx-local-downloader/1.3 (Python; FITS archive client)"
 RETRY_STATUS = {429, 500, 502, 503, 504}
 PIXEL_SCALE = 6.15  # SPHEREx arcsec per pixel
 FITS_ENDINGS = (".fits", ".fits.gz", ".fits.fz", ".fit", ".fit.gz", ".fit.fz",
                 ".fts", ".fts.gz", ".fts.fz")
+
+# ---- display ----
+DISPLAY_SCALE = 3           # each pixel drawn as a 3x3 block in the PNGs
+
+# ---- pixel masking ----
+# FLAGS bits treated as artifacts. Names are matched against the bit
+# definitions in the FLAGS header (MP_<NAME> = bit). Anything marking a
+# real source is deliberately NOT in this list.
+BAD_FLAG_NAMES = {
+    "TRANSIENT", "OVERFLOW", "SUR_ERROR", "NONFUNC", "MISSING_DATA",
+    "HOT", "COLD", "NONLINEAR", "PERSIST", "OUTLIER", "PHANMISS", "DICHROIC",
+}
+
+# ---- moving-object search ----
+PASS_GAP_DAYS = 30          # frames further apart than this belong to different survey passes
+DETECT_SIGMA = 5.0          # detection threshold in difference images (x noise)
+MIN_BLOB_PIXELS = 2         # single-pixel spikes = cosmic rays / hot pixels
+MAX_DETECTIONS_PER_FRAME = 40
+LINK_TOLERANCE_PX = 1.5     # allowed distance from the straight-line prediction
+MIN_TRACK_POINTS = 3
+MIN_TRACK_SHIFT_PX = 1.0    # ignore "tracks" that don't really move (static residuals)
+SLOW_MAX_PX_PER_DAY = 3.0   # within-pass tracks slower than this = "slow mover"
+MAX_PX_PER_DAY = 200.0
+PAIR_MIN_SHIFT_PX = 0.7     # pass-to-pass shifts for proper-motion candidates
+PAIR_MAX_SHIFT_PX = 4.0
 
 
 class OffImage(Exception):
@@ -87,8 +117,8 @@ class Progress:
         self.path = root / "progress.json"
         self.data = {
             "stage": "searching",   # searching, downloading, processing, done, no_data, error
-            "total": 0,             # frames expected
-            "done": 0,              # frames ready to view
+            "total": 0,
+            "done": 0,
             "downloaded": 0,
             "sources": {"s3": 0, "irsa": 0, "cached": 0},
             "skipped": 0,
@@ -108,8 +138,10 @@ class Progress:
             temp.write_text(json.dumps(self.data), encoding="utf-8")
             replace_with_retry(temp, self.path)
         except OSError:
-            pass  # a missed update is fine; the next one will catch up
+            pass
 
+
+# ---------------------------------------------------------------- search
 
 def request_with_retries(session, method, url, *, params=None, stream=False,
                          timeout=(30, 240), attempts=5):
@@ -184,11 +216,9 @@ def query_collection(collection, ra, dec, radius):
 
         path = urllib.parse.urlparse(url).path
         filename = Path(path).name.upper()
-        # SPHEREx Level-2 names encode detector as _2D4_ (D4).
         if not (re.search(r"D4(?:_|\.|$)", filename) or re.search(r"/4/", path)):
             continue
 
-        # Path in NASA's S3 bucket, if IRSA provides one for this file
         s3_path = None
         raw_cloud = cell(row, cloud_col)
         if raw_cloud is not None and str(raw_cloud).strip():
@@ -197,9 +227,6 @@ def query_collection(collection, ra, dec, radius):
                 s3_path = f"{aws['bucket_name']}/{aws['key']}"
             except (ValueError, KeyError, TypeError):
                 s3_path = None
-
-        # IRSA didn't give a cloud path: derive it from the IRSA address,
-        # since the S3 bucket mirrors IRSA's folder layout
         if s3_path is None:
             marker = "/ibe/data/spherex/"
             if marker in path:
@@ -218,6 +245,8 @@ def query_collection(collection, ra, dec, radius):
     print(f"  SIA2 observations: {len(table)}; D4 candidates: {len(rows)}")
     return rows
 
+
+# ---------------------------------------------------------------- downloads
 
 def add_cutout(url, ra, dec, size):
     parts = urllib.parse.urlsplit(url)
@@ -240,7 +269,6 @@ def safe_name(url):
 
 
 def valid_fits(path):
-    """True if the file exists and opens as FITS with some data in it."""
     if not path.exists() or path.stat().st_size <= 2880:
         return False
     try:
@@ -273,7 +301,7 @@ def download_fits(session, url, destination):
 def shift_header(header, x0, y0):
     """Adjust a header so its WCS still matches after cropping at (x0, y0)."""
     for key in ("BSCALE", "BZERO", "BLANK"):
-        header.pop(key, None)  # data is already scaled to real values
+        header.pop(key, None)
     for key in list(header.keys()):
         if re.fullmatch(r"CRPIX1[A-Z]?", key):
             header[key] = header[key] - x0
@@ -301,10 +329,7 @@ def s3_cutout(s3_path, ra, dec, size_deg, destination):
         if x1 - x0 < 8 or y1 - y0 < 8:
             raise OffImage("target is at the edge of this exposure")
 
-        # .section downloads only these rows/columns, not the whole file
         data = np.array(image.section[y0:y1, x0:x1], dtype=np.float32)
-
-        # observation time often lives in the primary header; copy it over
         for key in ("DATE-OBS", "MJD-OBS", "DATE-AVG", "MJD-AVG", "DATE-END"):
             if key not in header and key in primary:
                 header[key] = primary[key]
@@ -353,6 +378,19 @@ def source_kind(source):
     return "s3" if source.startswith("s3://") else "irsa"
 
 
+# ---------------------------------------------------------------- frames
+
+def target_grid(ra, dec, cutout_deg):
+    """A north-up, east-left grid centered on the target at SPHEREx pixel scale."""
+    n = max(16, int(round(cutout_deg * 3600 / PIXEL_SCALE)))
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.crval = [ra, dec]
+    w.wcs.crpix = [(n + 1) / 2, (n + 1) / 2]
+    w.wcs.cdelt = [-PIXEL_SCALE / 3600, PIXEL_SCALE / 3600]
+    return w, n
+
+
 def find_image_hdus(hdul):
     """Prefer SPHEREx IMAGE extensions; fall back to any 2-D image HDU."""
     preferred = []
@@ -373,74 +411,361 @@ def find_image_hdus(hdul):
     return preferred or fallback[:1]
 
 
-def make_frame(fits_path, output_path):
-    """
-    Render the FITS IMAGE array at its native sampling:
-      - actual IMAGE pixels (no reprojection or resizing)
-      - linear grayscale stretch using the 2nd and 99.5th percentiles
-      - nearest-neighbour enlargement for display only
-      - lossless PNG output
-    """
+_FLAG_NOTE_PRINTED = False
+
+
+def bad_flag_mask(flags_hdu):
+    """Boolean mask of artifact pixels, using the bit names in the FLAGS header."""
+    global _FLAG_NOTE_PRINTED
+    bits = {}
+    for key, value in flags_hdu.header.items():
+        if key.startswith("MP_"):
+            try:
+                bits[key[3:]] = int(value)
+            except (TypeError, ValueError):
+                pass
+    if not _FLAG_NOTE_PRINTED:
+        _FLAG_NOTE_PRINTED = True
+        if bits:
+            print("  FLAGS bit definitions: " + ", ".join(f"{k}={v}" for k, v in sorted(bits.items(), key=lambda kv: kv[1])))
+        else:
+            print("  FLAGS header has no MP_ bit definitions; flag masking is off (spike filter still applies).")
+    bad = 0
+    used = []
+    for name, bit in bits.items():
+        if name in BAD_FLAG_NAMES:
+            bad |= (1 << bit)
+            used.append(name)
+    if not bad:
+        return None, "none"
+    flags = np.asarray(flags_hdu.data).astype(np.int64)
+    return (flags & bad) != 0, ",".join(sorted(used))
+
+
+def load_aligned(fits_path, grid_wcs, n):
+    """Read IMAGE (+FLAGS), mask artifact pixels, reproject onto the shared grid."""
     with fits.open(fits_path, memmap=False) as hdul:
         image_hdus = find_image_hdus(hdul)
         if not image_hdus:
-            print(f"  No 2-D image extension found in {fits_path.name}; skipping frame.")
             return None
-
         index, hdu = image_hdus[0]
-        data = np.asarray(hdu.data, dtype=np.float32)
-        if data.ndim != 2:
-            print(f"  IMAGE is not 2-D in {fits_path.name}; skipping frame.")
-            return None
+        data = np.array(hdu.data, dtype=np.float32)
+        header = hdu.header.copy()
 
-        finite = np.isfinite(data)
-        if not finite.any():
-            print(f"  Image is all non-finite: {fits_path.name}")
-            return None
+        masked, flag_note = 0, "none"
+        try:
+            flags_hdu = hdul["FLAGS"]
+        except KeyError:
+            flags_hdu = None
+        if flags_hdu is not None and flags_hdu.data is not None and flags_hdu.data.shape == data.shape:
+            bad, flag_note = bad_flag_mask(flags_hdu)
+            if bad is not None:
+                masked = int(bad.sum())
+                data[bad] = np.nan
 
-        lo, hi = np.nanpercentile(data[finite], [2.0, 99.5])
-        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-            lo = float(np.nanmin(data[finite]))
-            hi = float(np.nanmax(data[finite]))
-        if not np.isfinite(lo + hi) or hi <= lo:
-            hi = lo + 1.0
+        aligned, footprint = reproject_interp((data, WCS(header)), grid_wcs, shape_out=(n, n))
+        aligned[footprint == 0] = np.nan
+    return aligned.astype(np.float32), header, index, masked, flag_note
 
-        scaled = np.clip((data - lo) / (hi - lo), 0.0, 1.0)
-        scaled[~finite] = 0.0
 
-        display_scale = 3
-        scaled = np.repeat(np.repeat(scaled, display_scale, axis=0),
-                           display_scale, axis=1)
-        pixels = np.round(scaled * 255).astype(np.uint8)
+def save_png(array, path, lo, hi, fill):
+    """Grayscale PNG, north up (FITS row 0 is the bottom), pixels as blocks."""
+    img = np.array(array, dtype=np.float32)
+    img[~np.isfinite(img)] = fill
+    if not hi > lo:
+        hi = lo + 1.0
+    scaled = np.clip((img - lo) / (hi - lo), 0.0, 1.0)
+    scaled = np.flipud(scaled)
+    scaled = np.repeat(np.repeat(scaled, DISPLAY_SCALE, axis=0), DISPLAY_SCALE, axis=1)
+    Image.fromarray(np.round(scaled * 255).astype(np.uint8), mode="L").save(path, format="PNG", optimize=True)
 
-        from PIL import Image
-        Image.fromarray(pixels, mode="L").save(output_path, format="PNG", optimize=True)
 
-        header = hdu.header
-        ra = header.get("CRVAL1")
-        dec = header.get("CRVAL2")
-        band = header.get("BAND") or header.get("FILTER") or header.get("WAVELNTH")
-        obs = header.get("DATE-OBS") or header.get("MJD-OBS") or ""
+def make_frame(fits_path, output_path, grid_wcs, n):
+    """Aligned, masked frame PNG. Returns (record, aligned array) or (None, None)."""
+    loaded = load_aligned(fits_path, grid_wcs, n)
+    if loaded is None:
+        print(f"  No 2-D image extension found in {fits_path.name}; skipping frame.")
+        return None, None
+    aligned, header, index, masked, flag_note = loaded
 
-        return {
-            "fits_file": fits_path.name,
-            "frame_file": output_path.name,
-            "hdu": index,
-            "ra": "" if ra is None else ra,
-            "dec": "" if dec is None else dec,
-            "band": "" if band is None else band,
-            "observation": obs,
-            "native_width": int(data.shape[1]),
-            "native_height": int(data.shape[0]),
-            "display_scale": display_scale,
-            "stretch_percentiles": "2.0,99.5",
-            "stretch_min": float(lo),
-            "stretch_max": float(hi),
-        }
+    finite = np.isfinite(aligned)
+    if finite.mean() < 0.3:
+        print(f"  {fits_path.name} covers too little of the target area; skipping frame.")
+        return None, None
 
+    background = float(np.nanmedian(aligned))
+    lo, hi = np.nanpercentile(aligned[finite], [2.0, 99.5])
+    save_png(aligned, output_path, lo, hi, fill=background)
+
+    ra = header.get("CRVAL1")
+    dec = header.get("CRVAL2")
+    band = header.get("BAND") or header.get("FILTER") or header.get("WAVELNTH")
+    obs = header.get("DATE-OBS") or header.get("MJD-OBS") or ""
+    record = {
+        "fits_file": fits_path.name,
+        "frame_file": output_path.name,
+        "hdu": index,
+        "ra": "" if ra is None else ra,
+        "dec": "" if dec is None else dec,
+        "band": "" if band is None else band,
+        "observation": obs,
+        "native_width": n,
+        "native_height": n,
+        "display_scale": DISPLAY_SCALE,
+        "stretch_percentiles": "2.0,99.5",
+        "stretch_min": float(lo),
+        "stretch_max": float(hi),
+        "masked_pixels": masked,
+        "masked_flags": flag_note,
+    }
+    return record, aligned
+
+
+# ---------------------------------------------------------------- moving objects
+
+def record_mjd(record):
+    value = record.get("mjd")
+    if value not in ("", None):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+    obs = str(record.get("observation") or "").strip()
+    try:
+        return float(obs)  # MJD-OBS stored as a number
+    except ValueError:
+        pass
+    try:
+        return float(Time(obs.replace(" ", "T")).mjd)
+    except Exception:
+        return float("nan")
+
+
+def robust_sigma(values):
+    v = values[np.isfinite(values)]
+    if v.size < 10:
+        return float("nan")
+    return float(1.4826 * np.median(np.abs(v - np.median(v))))
+
+
+def find_blobs(image, threshold, min_pixels=MIN_BLOB_PIXELS):
+    """Connected spots above threshold; single-pixel spikes are dropped."""
+    mask = np.isfinite(image) & (image > threshold)
+    labels, count = ndimage.label(mask)
+    blobs = []
+    for label in range(1, count + 1):
+        ys, xs = np.nonzero(labels == label)
+        if len(xs) < min_pixels:
+            continue
+        weights = image[ys, xs]
+        total = float(weights.sum())
+        blobs.append({
+            "x": float((xs * weights).sum() / total),
+            "y": float((ys * weights).sum() / total),
+            "peak": float(weights.max()),
+            "pixels": int(len(xs)),
+        })
+    return blobs
+
+
+def point_info(grid_wcs, n, x, y):
+    sky = grid_wcs.pixel_to_world(x, y)
+    return {
+        "x": round(x, 2), "y": round(y, 2),
+        # fractions of the PNG width/height from the top-left, for drawing overlays
+        "fx": round((x + 0.5) / n, 4), "fy": round(1 - (y + 0.5) / n, 4),
+        "ra": round(float(sky.ra.deg), 6), "dec": round(float(sky.dec.deg), 6),
+    }
+
+
+def position_angle(vx, vy):
+    """Direction of motion in degrees east of north (east is -x on this grid)."""
+    return round(math.degrees(math.atan2(-vx, vy)) % 360, 1)
+
+
+def find_movers(records, aligned_by_file, grid_wcs, n, diffs_dir, ra, dec):
+    """Median still sky -> difference frames -> spots -> straight-line tracks."""
+    ordered = time_order(records)
+    frames = [r for r in ordered if r["frame_file"] in aligned_by_file]
+    for r in records:
+        r.setdefault("diff_file", "")
+    if len(frames) < 3:
+        return {"note": "Fewer than 3 frames; motion search skipped.", "tracks": [], "pairs": []}
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        cube = np.array([aligned_by_file[r["frame_file"]] - np.nanmedian(aligned_by_file[r["frame_file"]])
+                         for r in frames], dtype=np.float32)
+        still = np.nanmedian(cube, axis=0)
+    diffs = cube - still
+    mjds = [record_mjd(r) for r in frames]
+
+    # survey passes: groups of frames separated by long gaps
+    pass_ids, current, last = [], 0, None
+    for t in mjds:
+        if last is not None and np.isfinite(t) and t - last > PASS_GAP_DAYS:
+            current += 1
+        pass_ids.append(current)
+        if np.isfinite(t):
+            last = t
+    by_pass = {}
+    for i, p in enumerate(pass_ids):
+        by_pass.setdefault(p, []).append(i)
+
+    # difference frames + detections
+    detections, sigmas = [], []
+    for i, (record, diff) in enumerate(zip(frames, diffs), 1):
+        sigma = robust_sigma(diff)
+        sigmas.append(sigma)
+        diff_name = f"diff_{i:04d}.png"
+        lim = 6 * sigma if np.isfinite(sigma) and sigma > 0 else 1.0
+        save_png(diff, diffs_dir / diff_name, -lim, lim, fill=0.0)  # gray = no change
+        record["diff_file"] = diff_name
+        if not (np.isfinite(sigma) and sigma > 0):
+            detections.append([])
+            continue
+        blobs = find_blobs(diff, DETECT_SIGMA * sigma)
+        for b in blobs:
+            b["snr"] = b["peak"] / sigma
+        blobs.sort(key=lambda b: -b["snr"])
+        detections.append(blobs[:MAX_DETECTIONS_PER_FRAME])
+
+    # link detections within each pass along straight lines at steady speed
+    proposals = []
+    for p, fidx in by_pass.items():
+        fidx = [f for f in fidx if np.isfinite(mjds[f])]
+        if len(fidx) < MIN_TRACK_POINTS:
+            continue
+        for ai, fa in enumerate(fidx):
+            for fb in fidx[ai + 1:]:
+                dt = mjds[fb] - mjds[fa]
+                if dt <= 0:
+                    continue
+                for ia, da in enumerate(detections[fa]):
+                    for ib, db in enumerate(detections[fb]):
+                        dx, dy = db["x"] - da["x"], db["y"] - da["y"]
+                        if math.hypot(dx, dy) < MIN_TRACK_SHIFT_PX:
+                            continue
+                        vx, vy = dx / dt, dy / dt
+                        if math.hypot(vx, vy) > MAX_PX_PER_DAY:
+                            continue
+                        points = [(fa, ia), (fb, ib)]
+                        for fk in fidx:
+                            if fk in (fa, fb):
+                                continue
+                            px = da["x"] + vx * (mjds[fk] - mjds[fa])
+                            py = da["y"] + vy * (mjds[fk] - mjds[fa])
+                            best, best_d = None, LINK_TOLERANCE_PX
+                            for ik, dk in enumerate(detections[fk]):
+                                d = math.hypot(dk["x"] - px, dk["y"] - py)
+                                if d <= best_d:
+                                    best, best_d = ik, d
+                            if best is not None:
+                                points.append((fk, best))
+                        if len(points) >= MIN_TRACK_POINTS:
+                            proposals.append((p, tuple(sorted(set(points)))))
+
+    tracks, used = [], set()
+    scored = []
+    for p, points in set(proposals):
+        t = np.array([mjds[f] for f, _ in points])
+        xs = np.array([detections[f][i]["x"] for f, i in points])
+        ys = np.array([detections[f][i]["y"] for f, i in points])
+        if np.ptp(t) <= 0:
+            continue
+        cx, bx = np.polyfit(t, xs, 1)
+        cy, by = np.polyfit(t, ys, 1)
+        rms = float(np.sqrt(np.mean((xs - (cx * t + bx)) ** 2 + (ys - (cy * t + by)) ** 2)))
+        if rms > LINK_TOLERANCE_PX:
+            continue
+        scored.append((-len(points), rms, p, points, cx, cy))
+    scored.sort(key=lambda s: (s[0], s[1]))
+    for _, rms, p, points, vx, vy in scored:
+        if any(pt in used for pt in points):
+            continue
+        used.update(points)
+        speed = math.hypot(vx, vy)
+        tracks.append({
+            "kind": "slow mover" if speed <= SLOW_MAX_PX_PER_DAY else "fast mover",
+            "pass": p,
+            "speed_px_per_day": round(speed, 3),
+            "speed_arcsec_per_day": round(speed * PIXEL_SCALE, 2),
+            "direction_deg": position_angle(vx, vy),
+            "rms_px": round(rms, 2),
+            "points": [
+                {
+                    "frame_file": frames[f]["frame_file"],
+                    "diff_file": frames[f]["diff_file"],
+                    "mjd": round(mjds[f], 5),
+                    "snr": round(detections[f][i]["snr"], 1),
+                    **point_info(grid_wcs, n, detections[f][i]["x"], detections[f][i]["y"]),
+                }
+                for f, i in sorted(points, key=lambda pt: mjds[pt[0]])
+            ],
+        })
+    tracks.sort(key=lambda t: (t["kind"] != "slow mover", t["speed_px_per_day"]))
+
+    # compare first and last pass for small shifts (nearby stars, brown dwarfs)
+    pairs = []
+    passes = sorted(by_pass)
+    if len(passes) >= 2:
+        first, last_p = by_pass[passes[0]], by_pass[passes[-1]]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            s1 = np.nanmedian(cube[first], axis=0)
+            s2 = np.nanmedian(cube[last_p], axis=0)
+            t1 = np.nanmean([mjds[i] for i in first])
+            t2 = np.nanmean([mjds[i] for i in last_p])
+        change = s2 - s1
+        sigma = robust_sigma(change)
+        if np.isfinite(sigma) and sigma > 0 and np.isfinite(t2 - t1) and t2 > t1:
+            appeared = find_blobs(change, DETECT_SIGMA * sigma)
+            vanished = find_blobs(-change, DETECT_SIGMA * sigma)
+            years = (t2 - t1) / 365.25
+            for a in appeared:
+                best, best_d = None, PAIR_MAX_SHIFT_PX
+                for v in vanished:
+                    d = math.hypot(a["x"] - v["x"], a["y"] - v["y"])
+                    if PAIR_MIN_SHIFT_PX <= d <= best_d:
+                        best, best_d = v, d
+                if best is None:
+                    continue
+                vanished.remove(best)
+                pairs.append({
+                    "kind": "proper-motion candidate",
+                    "shift_px": round(best_d, 2),
+                    "shift_arcsec": round(best_d * PIXEL_SCALE, 1),
+                    "arcsec_per_year": round(best_d * PIXEL_SCALE / years, 1),
+                    "direction_deg": position_angle(a["x"] - best["x"], a["y"] - best["y"]),
+                    "snr": round(min(a["peak"], best["peak"]) / sigma, 1),
+                    "from": {"mjd": round(t1, 3), **point_info(grid_wcs, n, best["x"], best["y"])},
+                    "to": {"mjd": round(t2, 3), **point_info(grid_wcs, n, a["x"], a["y"])},
+                })
+            pairs.sort(key=lambda q: -q["snr"])
+
+    return {
+        "target": {"ra": ra, "dec": dec},
+        "grid": {"size_px": n, "pixel_scale_arcsec": PIXEL_SCALE, "display_scale": DISPLAY_SCALE,
+                 "orientation": "north up, east left"},
+        "passes": [
+            {"pass": p, "frames": len(idx),
+             "start_mjd": round(min(mjds[i] for i in idx), 3) if all(np.isfinite(mjds[i]) for i in idx) else None,
+             "end_mjd": round(max(mjds[i] for i in idx), 3) if all(np.isfinite(mjds[i]) for i in idx) else None}
+            for p, idx in sorted(by_pass.items())
+        ],
+        "settings": {
+            "detect_sigma": DETECT_SIGMA, "min_blob_pixels": MIN_BLOB_PIXELS,
+            "link_tolerance_px": LINK_TOLERANCE_PX, "min_track_points": MIN_TRACK_POINTS,
+            "slow_max_px_per_day": SLOW_MAX_PX_PER_DAY, "pass_gap_days": PASS_GAP_DAYS,
+        },
+        "tracks": tracks,
+        "pairs": pairs,
+    }
+
+
+# ---------------------------------------------------------------- index + run
 
 def time_order(records):
-    """Sort frame records by observation time (MJD, then date text)."""
     return sorted(records, key=lambda r: (r["mjd"] == "", r["mjd"] if r["mjd"] != "" else 0,
                                           str(r["observation"])))
 
@@ -448,31 +773,44 @@ def time_order(records):
 def write_index(index_path, records):
     """Write frames_index.csv in time order, swapping it in all at once."""
     ordered = time_order(records)
+    fieldnames = []
+    for r in ordered:
+        for key in r:
+            if key not in fieldnames:
+                fieldnames.append(key)
     temp = index_path.with_suffix(".csv.part")
     with temp.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(ordered[0].keys()))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, restval="")
         writer.writeheader()
         writer.writerows(ordered)
     replace_with_retry(temp, index_path)
     return ordered
 
 
-def run(args, root, fits_dir, frames_dir, progress):
+def write_json(path, payload):
+    temp = path.with_suffix(".json.part")
+    temp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    replace_with_retry(temp, path)
+
+
+def run(args, root, fits_dir, frames_dir, diffs_dir, progress):
     collections = COLLECTIONS + (DEEP_COLLECTIONS if args.include_deep else [])
     found = []
     failures = []
     started = time.time()
     index_path = root / "frames_index.csv"
+    grid_wcs, n = target_grid(args.ra, args.dec, args.cutout)
 
-    # Start clean so the page never shows frames from an earlier run
-    for old in frames_dir.glob("frame_*.png"):
-        old.unlink(missing_ok=True)
-    for name in ("frames_index.csv", "spherex_blink.gif"):
+    # Start clean so the page never shows results from an earlier run
+    for folder in (frames_dir, diffs_dir):
+        for old in folder.glob("*.png"):
+            old.unlink(missing_ok=True)
+    for name in ("frames_index.csv", "spherex_blink.gif", "candidates.json"):
         (root / name).unlink(missing_ok=True)
 
     print("\nSPHEREx downloader")
     print(f"Target: RA {args.ra:.6f}°, Dec {args.dec:.6f}°")
-    print(f"Search radius: {args.radius}° · cutout: {args.cutout}° · detector: D4")
+    print(f"Search radius: {args.radius}° · cutout: {args.cutout}° ({n}x{n} px grid) · detector: D4")
     print(f"Source: {'AWS S3 (IRSA fallback)' if HAVE_S3 else 'IRSA cutouts (install s3fs for AWS S3)'}")
     print(f"Output: {root}\n")
 
@@ -484,19 +822,19 @@ def run(args, root, fits_dir, frames_dir, progress):
             failures.append(f"{collection} search: {exc}")
             print(f"  WARNING: {exc}")
 
-    # The same exposure can appear in DR1 and QR3; keep the first one found (DR1).
     unique = {}
     for item in found:
         unique.setdefault(item["obs_id"] or item["url"], item)
     candidates = list(unique.values())
 
     records = []
+    aligned_by_file = {}
 
     def add_frame(fits_path, collection, source, mjd):
-        """Make a PNG right away and refresh the index so the page can use it."""
+        """Aligned, masked PNG right away, plus a refreshed index for the page."""
         frame_path = frames_dir / f"frame_{len(records) + 1:04d}.png"
         try:
-            record = make_frame(fits_path, frame_path)
+            record, aligned = make_frame(fits_path, frame_path, grid_wcs, n)
         except Exception as exc:
             failures.append(f"Frame {fits_path.name}: {exc}")
             print(f"  FRAME FAILED: {exc}")
@@ -506,6 +844,7 @@ def run(args, root, fits_dir, frames_dir, progress):
             record["source_url"] = source
             record["mjd"] = "" if mjd is None else mjd
             records.append(record)
+            aligned_by_file[record["frame_file"]] = aligned
             write_index(index_path, records)
 
     if not candidates:
@@ -526,7 +865,6 @@ def run(args, root, fits_dir, frames_dir, progress):
             progress.data["sources"]["cached"] += 1
             progress.update(downloaded=progress.data["downloaded"] + 1, done=len(records))
     else:
-        # Time order, and spread evenly over time if there are more than max-files
         candidates.sort(key=lambda x: (x["mjd"] is None, x["mjd"] or 0))
         if args.max_files > 0 and len(candidates) > args.max_files:
             idx = np.linspace(0, len(candidates) - 1, args.max_files).round().astype(int)
@@ -554,7 +892,6 @@ def run(args, root, fits_dir, frames_dir, progress):
                     print(f"  [{done_count}/{len(candidates)}] {path.name} ({kind.upper()})")
                     add_frame(path, item["collection"], source, item["mjd"])
 
-                # Expected total shrinks if some exposures turn out unusable
                 usable = len(candidates) - progress.data["skipped"] - progress.data["failed"]
                 progress.update(done=len(records), total=max(usable, len(records)))
 
@@ -568,18 +905,30 @@ def run(args, root, fits_dir, frames_dir, progress):
             (root / "download_errors.txt").write_text("\n\n".join(failures), encoding="utf-8")
         return 1
 
-    # Final pass: index in time order, plus the animated GIF
-    progress.update(stage="processing", done=len(records), total=len(records))
+    # Moving-object search
+    progress.update(stage="processing", done=len(records), total=len(records),
+                    message="Finding moving objects…")
+    print("\nSearching for moving objects…")
+    try:
+        result = find_movers(records, aligned_by_file, grid_wcs, n, diffs_dir, args.ra, args.dec)
+        write_json(root / "candidates.json", result)
+        slow = sum(1 for t in result["tracks"] if t["kind"] == "slow mover")
+        fast = len(result["tracks"]) - slow
+        print(f"  Passes: {len(result.get('passes', []))} · slow movers: {slow} · fast movers: {fast} · "
+              f"proper-motion candidates: {len(result['pairs'])}")
+    except Exception as exc:
+        failures.append(f"Motion search: {exc}")
+        print(f"  Motion search failed: {exc}")
+
     ordered = write_index(index_path, records)
     try:
         gif_images = [imageio.imread(frames_dir / r["frame_file"]) for r in ordered]
         imageio.mimsave(root / "spherex_blink.gif", gif_images, duration=0.65, loop=0)
     except Exception as exc:
-        print(f"  GIF skipped: {exc}")  # frames near image edges can differ in size
+        print(f"  GIF skipped: {exc}")
 
     print("\nCOMPLETE")
     print(f"Frames created: {len(records)} in {time.time() - started:.1f}s total")
-    print(f"Frame index: {index_path}")
 
     if failures:
         log_path = root / "download_errors.txt"
@@ -591,7 +940,7 @@ def run(args, root, fits_dir, frames_dir, progress):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download SPHEREx DR1/QR3 D4 cutouts and make frames.")
+    parser = argparse.ArgumentParser(description="Download SPHEREx DR1/QR3 D4 cutouts, make aligned frames, find movers.")
     parser.add_argument("--ra", type=float, default=269.44627, help="Target RA in degrees")
     parser.add_argument("--dec", type=float, default=4.76820, help="Target Dec in degrees")
     parser.add_argument("--radius", type=float, default=0.06, help="SIA2 search radius in degrees")
@@ -611,12 +960,13 @@ def main():
     root = args.out.expanduser().resolve()
     fits_dir = root / "fits"
     frames_dir = root / "frames"
-    fits_dir.mkdir(parents=True, exist_ok=True)
-    frames_dir.mkdir(parents=True, exist_ok=True)
+    diffs_dir = root / "diffs"
+    for folder in (fits_dir, frames_dir, diffs_dir):
+        folder.mkdir(parents=True, exist_ok=True)
 
     progress = Progress(root)
     try:
-        return run(args, root, fits_dir, frames_dir, progress)
+        return run(args, root, fits_dir, frames_dir, diffs_dir, progress)
     except Exception as exc:
         progress.update(stage="error", message=f"Scan failed: {exc}")
         raise

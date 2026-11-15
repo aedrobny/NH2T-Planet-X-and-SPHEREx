@@ -51,6 +51,7 @@ def target_info(folder: Path) -> dict:
     fits_count = sum(1 for p in fits_dir.iterdir() if p.is_file() and ".fit" in p.name.lower()) if fits_dir.exists() else 0
     frames = sorted(p.name for p in frames_dir.glob("*.png")) if frames_dir.exists() else []
     has_index = (folder / "frames_index.csv").is_file()
+    has_candidates = (folder / "candidates.json").is_file()
     progress = read_progress(folder)
 
     if folder.name in JOBS:
@@ -65,7 +66,7 @@ def target_info(folder: Path) -> dict:
         status = "not_started"
 
     match = re.fullmatch(r"ra_([0-9]+(?:\.[0-9]+)?)_dec_([+-][0-9]+(?:\.[0-9]+)?)", folder.name)
-    
+
     preloaded_names = load_preloaded_targets()
     display_name = preloaded_names.get(folder.name, folder.name)
 
@@ -80,6 +81,7 @@ def target_info(folder: Path) -> dict:
         "frames": frames,
         "progress": progress,
         "index_url": f"/spherex_data/{folder.name}/frames_index.csv" if has_index else None,
+        "candidates_url": f"/spherex_data/{folder.name}/candidates.json" if has_candidates else None,
     }
 
 
