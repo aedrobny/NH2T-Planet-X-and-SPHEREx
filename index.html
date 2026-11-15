@@ -215,7 +215,7 @@
                         const m = t.key.match(/^ra_([0-9.]+)_dec_([+-][0-9.]+)$/);
                         if (m) {
                             $("ra").value = m[1];
-                            $("dec").value = m[2];
+                            $("dec").value = Number(m[2]).toString();
                             loadOrScan(Number(m[1]), Number(m[2]));
                         }
                     };
