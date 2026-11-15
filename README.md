@@ -113,7 +113,7 @@ flowchart LR
 - Very slow movers can shift by less than one pixel between images, so they can look like they're standing still.
 - SPHEREx sees the sky through a variable filter, so a star's brightness differs from image to image. A brightness change only means something when comparing the same band.
 - The tool shows you the images. Spotting what moved is still up to you, and we don't claim to have found Planet X or any new object.
-- The IRSA IPA occasionally bugs out/crashes and does not display data. This error is hard to work around, and we were unable to fix it at the moment.
+- The IRSA IPA occasionally bugs out/crashes and does not display data. 
 - [Add anything specific to your prototype, such as slow scans or limited coverage.]
 
 ## What's next
