@@ -225,7 +225,7 @@
                 for (const t of items) {
                     const b = document.createElement("button");
                     b.type = "button";
-                    b.textContent = `${Number(t.ra ?? t.key.match(/^ra_([0-9.]+)/)?.[1]).toFixed(5)}, ${Number(t.dec ?? t.key.match(/_dec_([+-][0-9.]+)/)?.[1]).toFixed(5)} · ${t.status.replaceAll("_", " ")} · ${t.frame_count} frames`;
+                    b.textContent = b.textContent = t.display_name || t.key;
                     b.title = t.key;
                     b.onclick = () => {
                         const m = t.key.match(/^ra_([0-9.]+)_dec_([+-][0-9.]+)$/);

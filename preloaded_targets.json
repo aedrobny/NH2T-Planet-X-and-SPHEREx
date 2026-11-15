@@ -1,0 +1,41 @@
+
+{
+  "targets": [
+    {
+      "key": "ra_10.68470_dec_+41.26900",
+      "name": "Andromeda Galaxy (M31)"
+    },
+    {
+      "key": "ra_11.89579_dec_-25.28492",
+      "name": "Sculptor Galaxy"
+    },
+    {
+      "key": "ra_83.63310_dec_+22.01450",
+      "name": "Crab Nebula (M1)"
+    },
+    {
+      "key": "ra_83.82210_dec_-5.39110",
+      "name": "Orion Nebula (M42)"
+    },
+    {
+      "key": "ra_269.44627_dec_+4.76820",
+      "name": "Barnard's Star"
+    },
+    {
+      "key": "ra_331.04415_dec_-56.78284",
+      "name": "Epsilon Indi Ba/Bb (Brown Dwarf Pair)"
+    },
+    {
+      "key": "ra_133.79513_dec_-7.24515",
+      "name": "WISE 0855-0714 (Y Dwarf)"
+    },
+    {
+      "key": "ra_76.95653_dec_+30.40144",
+      "name": "RW Aurigae (Variable Star)"
+    },
+    {
+      "key": "ra_248.16761_dec_+66.75498",
+      "name": "R Draconis (Mira Variable)"
+    }
+  ]
+}

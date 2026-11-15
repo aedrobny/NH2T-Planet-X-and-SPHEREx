@@ -19,6 +19,20 @@ LOCK = threading.Lock()
 JOBS: set[str] = set()
 KEY_RE = re.compile(r"ra_[0-9]+(?:\.[0-9]+)?_dec_[+-][0-9]+(?:\.[0-9]+)?")
 
+PRELOADED_FILE = ROOT / "preloaded_targets.json"
+
+
+def load_preloaded_targets() -> dict:
+    try:
+        data = json.loads(PRELOADED_FILE.read_text(encoding="utf-8"))
+        return {
+            target["key"]: target["name"]
+            for target in data.get("targets", [])
+        }
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"[viewer] Could not load preloaded targets: {exc}")
+        return {}
+
 
 def coord_key(ra: float, dec: float) -> str:
     return f"ra_{ra:.5f}_dec_{dec:+.5f}"
@@ -51,8 +65,13 @@ def target_info(folder: Path) -> dict:
         status = "not_started"
 
     match = re.fullmatch(r"ra_([0-9]+(?:\.[0-9]+)?)_dec_([+-][0-9]+(?:\.[0-9]+)?)", folder.name)
+    
+    preloaded_names = load_preloaded_targets()
+    display_name = preloaded_names.get(folder.name, folder.name)
+
     return {
         "key": folder.name,
+        "display_name": display_name,
         "ra": float(match.group(1)) if match else None,
         "dec": float(match.group(2)) if match else None,
         "status": status,

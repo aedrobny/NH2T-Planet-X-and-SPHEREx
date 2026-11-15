@@ -30,7 +30,7 @@ source .venv/bin/activate
 python spherex_server.py
 ```
 
-Open <http://127.0.0.1:8765/spherex_local_png_viewer.html> and keep the terminal running.
+Open <http://127.0.0.1:8000/index.html> and keep the terminal running.
 
 ## Use
 
