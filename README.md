@@ -93,7 +93,7 @@ flowchart LR
 ## What's different
 
 - **Honest about the data.** The app tells you each frame is a real observation, that the sequence is separate observations and not video, and that the image stretch never changes the measurements.
-- **Built for beginners.** A simple Aim, Scan, Explore flow and plain labels instead of a wall of controls.
+- **Built for ease.** A simple coordinate input and plain labels instead of a wall of complex controls.
 - **Mission-control feel.** A frame counter, timeline and status readouts that make exploring the sky feel like an expedition.
 
 ## Honest limits
