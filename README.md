@@ -113,7 +113,7 @@ flowchart LR
 - Very slow movers can shift by less than one pixel between images, so they can look like they're standing still.
 - SPHEREx sees the sky through a variable filter, so a star's brightness differs from image to image. A brightness change only means something when comparing the same band.
 - The tool shows you the images. Spotting what moved is still up to you, and we don't claim to have found Planet X or any new object.
-- The IRSA IPA occasionally bugs out/crashes and does not display data. 
+- The IRSA IPA occasionally bugs out/crashes and does not display data. This error is hard to work around, and we were unable to fix it at the moment.
 - [Add anything specific to your prototype, such as slow scans or limited coverage.]
 
 ## What's next
@@ -142,7 +142,7 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 
 | Name | Role |
 |---|---|
-| Abigail Diaz | Head UI/UX/Graphic Designer, Asst. Software/Hardware Developer, Asst. Data Scientist/AI Specialist |
+| Abigail Diaz | Head UI/UX/Graphic Designer, Asst. Software/Hardware Developer |
 | Addison Drobny | Head Software/Hardware Developer |
 | Azure | Co Subject Matter Specialist, Co Storyteller/Communicator |
 | Drake Cheever | Co Subject Matter Specialist, Co Storyteller/Communicator |
@@ -189,16 +189,44 @@ Keep the terminal running while using the application.
 Visit: http://127.0.0.1:8000/index.html
 
 ### 6. Start exploring
-1. Enter right ascension (RA) and declination (Dec) in decimal degrees.
+1. Enter right ascension (RA) and declination (Dec) in decimal degrees. Some presets are also present to quickly load up some galaxies/stars images.
 
-2. Click INITIATE SCAN.
+## Good first targets**
 
-3. The server retrieves available SPHEREx observations and processes them into PNG frames.
+| Target | What it is | RA, Dec (degrees) | 
+|---|---|---|
+| Messier 51 (M51) | Whirlpool Galaxy | 202.4696 +47.1952 |
+| Epsilon Indi B | A nearby brown dwarf | 331.0438, −56.7828 |
+| R Draconis | A variable star | 248.1675, +66.7550 |
 
-4. Explore the observations using the playback controls.
+3. Click INITIATE SCAN.
+
+4. The server retrieves available SPHEREx observations and processes them into PNG frames.
+The output is stored under:
+
+```bash
+spherex_data/
+└── ra_269.45208_dec_+4.69336/
+    ├── fits/
+    ├── frames/
+    ├── frames_index.csv
+    └── spherex_blink.gif
+```
+
+> Saved targets are discovered by scanning spherex_data/; the HTML does not contain a hardcoded coordinate or frame folder. If a target already has an index and PNG frames, selecting it loads the saved frames instead of downloading again. If only FITS files exist, initiating the scan reruns the downloader, which can reuse valid local FITS files and regenerate frames.
+
+
+6. Explore the observations using the playback controls.
+7. To stop the server, press `Ctrl+C` in its terminal.
+
+## Notes
+
+- RA must be in `[0, 360)` degrees; Dec must be in `[-90, 90]` degrees.
+- Folder names use five decimal places and include an explicit `+` for positive declination.
+- The local server listens only on `127.0.0.1`.
 
 ## Acknowledgments and license
 
-Thanks to NASA, the SPHEREx team, IPAC/IRSA, and the NASA Space Apps Challenge organizers and mentors.
+Thank you to NASA, the SPHEREx team, IPAC/IRSA, and the NASA Space Apps Challenge organizers and mentors.
 
 License: Space Finder 3000
