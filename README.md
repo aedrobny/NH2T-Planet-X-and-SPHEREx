@@ -166,14 +166,6 @@ Visit: http://127.0.0.1:8000/index.html
 ### 6. Start exploring
 1. Enter right ascension (RA) and declination (Dec) in decimal degrees. Some presets are also present to quickly load up some galaxies/stars images.
 
-## Good first targets**
-
-| Target | What it is | RA, Dec (degrees) | 
-|---|---|---|
-| Messier 51 (M51) | Whirlpool Galaxy | 202.4696 +47.1952 |
-| Epsilon Indi B | A nearby brown dwarf | 331.0438, −56.7828 |
-| R Draconis | A variable star | 248.1675, +66.7550 |
-
 3. Click INITIATE SCAN.
 
 4. The server retrieves available SPHEREx observations and processes them into PNG frames.
