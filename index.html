@@ -230,9 +230,13 @@
                     b.onclick = () => {
                         const m = t.key.match(/^ra_([0-9.]+)_dec_([+-][0-9.]+)$/);
                         if (m) {
-                            $("ra").value = m[1];
-                            $("dec").value = m[2];
-                            loadOrScan(Number(m[1]), Number(m[2]));
+                            const ra = Number(m[1]);
+                            const dec = Number(m[2]);
+
+                            $("ra").value = ra.toString();
+                            $("dec").value = dec.toString();
+
+                            loadOrScan(ra, dec);
                         }
                     };
                     host.appendChild(b);
@@ -260,16 +264,23 @@
                 const names = { AWS: "AWS S3", IRSA: "IRSA", CACHE: "LOCAL CACHE" };
                 let source = "SOURCE: —";
                 if (parts.length === 1) source = "SOURCE: " + names[parts[0][0]];
-                else if (parts.length > 1) source = "SOURCE: " + parts.map(([n, c]) => `${n} ${c}`).join(" · ");
+                else if (parts.length > 1)
+                    source = "SOURCE: " + parts.map(([n, c]) => `${n} ${c}`).join(" · ");
                 const frames = `[Frames ${p.done || 0}/${p.total || "?"}]`;
                 switch (p.stage) {
-                    case "searching": return "SEARCHING IRSA ARCHIVE…";
-                    case "downloading": return `LOADING… ${source} ${frames}`;
-                    case "processing": return `FINISHING… ${frames}`;
-                    case "done": return `COMPLETE · ${source} ${frames}`;
+                    case "searching":
+                        return "SEARCHING IRSA ARCHIVE…";
+                    case "downloading":
+                        return `LOADING… ${source} ${frames}`;
+                    case "processing":
+                        return `FINISHING… ${frames}`;
+                    case "done":
+                        return `COMPLETE · ${source} ${frames}`;
                     case "error":
-                    case "no_data": return p.message || "Scan failed.";
-                    default: return `${String(p.stage).toUpperCase()} ${frames}`;
+                    case "no_data":
+                        return p.message || "Scan failed.";
+                    default:
+                        return `${String(p.stage).toUpperCase()} ${frames}`;
                 }
             }
             function showBanner(text, { complete = false, button = false } = {}) {
@@ -292,7 +303,9 @@
                             : "No processed frames are available yet.",
                     );
                 if (!info.index_url) throw new Error("No frame index is available yet.");
-                const csv = await fetch(info.index_url + "?v=" + Date.now(), { cache: "no-store" });
+                const csv = await fetch(info.index_url + "?v=" + Date.now(), {
+                    cache: "no-store",
+                });
                 if (!csv.ok) throw new Error("Frame index CSV could not be read.");
                 S.frames = parseCSV(await csv.text())
                     .map((x) => ({ ...x, file: x.frame_file || x.file }))
@@ -467,7 +480,10 @@
                             if (S.poll) clearInterval(S.poll);
                             S.poll = null;
                             if (S.key === key && S.partial) {
-                                showBanner(`All ${d.frame_count} frames downloaded.`, { complete: true, button: true });
+                                showBanner(`All ${d.frame_count} frames downloaded.`, {
+                                    complete: true,
+                                    button: true,
+                                });
                                 $("cand").textContent =
                                     "Download complete. Press “Load all frames” to restart the viewer with every frame in time order.";
                             } else {
@@ -479,14 +495,21 @@
                             if (S.poll) clearInterval(S.poll);
                             S.poll = null;
                             hideBanner();
-                            message(d.progress?.message || "Scan failed. Check the service logs for details.");
+                            message(
+                                d.progress?.message ||
+                                    "Scan failed. Check the service logs for details.",
+                            );
                             $("cand").textContent = "Check the service logs for details.";
                         } else {
                             const enough =
-                                total > 0 && d.index_url && d.frame_count >= Math.min(MIN_START_FRAMES, total);
+                                total > 0 &&
+                                d.index_url &&
+                                d.frame_count >= Math.min(MIN_START_FRAMES, total);
                             if (enough && S.key !== key) await loadTarget(key, true);
                             if (S.key === key && S.partial) {
-                                showBanner(`Playing ${S.frames.length} of ${total} · ${text}`);
+                                showBanner(
+                                    `Playing ${S.frames.length} of ${total} · ${text}`,
+                                );
                             } else {
                                 showBanner(text);
                                 message(text);
@@ -608,12 +631,30 @@
 
                 // NASA's IRSA copies first; others are backups if a server is down
                 const SURVEYS = [
-                    { id: "https://irsa.ipac.caltech.edu/data/hips/CDS/AllWISE/RGB-W4-W2-W1", name: "AllWISE color (IRSA)" },
-                    { id: "https://irsa.ipac.caltech.edu/data/hips/CDS/2MASS/Color", name: "2MASS color (IRSA)" },
-                    { id: "https://irsa.ipac.caltech.edu/data/hips/CDS/AllWISE/W2", name: "AllWISE 4.6 µm (IRSA)" },
-                    { id: "https://skies.esac.esa.int/AllWISEColor", name: "AllWISE color (ESA mirror)" },
-                    { id: "https://skies.esac.esa.int/DSSColor", name: "DSS optical (ESA mirror)" },
-                    { id: "https://alasky.cds.unistra.fr/SPHEREx/D1", name: "SPHEREx D1 (CDS)" },
+                    {
+                        id: "https://irsa.ipac.caltech.edu/data/hips/CDS/AllWISE/RGB-W4-W2-W1",
+                        name: "AllWISE color (IRSA)",
+                    },
+                    {
+                        id: "https://irsa.ipac.caltech.edu/data/hips/CDS/2MASS/Color",
+                        name: "2MASS color (IRSA)",
+                    },
+                    {
+                        id: "https://irsa.ipac.caltech.edu/data/hips/CDS/AllWISE/W2",
+                        name: "AllWISE 4.6 µm (IRSA)",
+                    },
+                    {
+                        id: "https://skies.esac.esa.int/AllWISEColor",
+                        name: "AllWISE color (ESA mirror)",
+                    },
+                    {
+                        id: "https://skies.esac.esa.int/DSSColor",
+                        name: "DSS optical (ESA mirror)",
+                    },
+                    {
+                        id: "https://alasky.cds.unistra.fr/SPHEREx/D1",
+                        name: "SPHEREx D1 (CDS)",
+                    },
                 ];
 
                 let aladin = null,
@@ -641,9 +682,20 @@
                     const t = currentTarget();
                     if (!aladin || !area || !t) return;
                     area.removeAll();
-                    area.add(A.circle(t.ra, t.dec, AREA_RADIUS_DEG, { color: "#ffbf4d", lineWidth: 1.5 }));
-                    area.add(A.circle(t.ra, t.dec, AREA_RADIUS_DEG / 8, { color: "#6dff5f", lineWidth: 2 }));
-                    if (fly && typeof aladin.animateToRaDec === "function") aladin.animateToRaDec(t.ra, t.dec, 1.5);
+                    area.add(
+                        A.circle(t.ra, t.dec, AREA_RADIUS_DEG, {
+                            color: "#ffbf4d",
+                            lineWidth: 1.5,
+                        }),
+                    );
+                    area.add(
+                        A.circle(t.ra, t.dec, AREA_RADIUS_DEG / 8, {
+                            color: "#6dff5f",
+                            lineWidth: 2,
+                        }),
+                    );
+                    if (fly && typeof aladin.animateToRaDec === "function")
+                        aladin.animateToRaDec(t.ra, t.dec, 1.5);
                     else aladin.gotoRaDec(t.ra, t.dec);
                 }
 
@@ -719,7 +771,8 @@
                     if (!aladin) return;
                     surveyIdx = (surveyIdx + 1) % SURVEYS.length;
                     const id = SURVEYS[surveyIdx].id;
-                    if (typeof aladin.setBaseImageLayer === "function") aladin.setBaseImageLayer(id);
+                    if (typeof aladin.setBaseImageLayer === "function")
+                        aladin.setBaseImageLayer(id);
                     else aladin.setImageSurvey(id);
                     skyInfo();
                 };
@@ -727,7 +780,11 @@
                     if (!aladin) return;
                     gridOn = !gridOn;
                     if (typeof aladin.setCooGrid === "function") {
-                        aladin.setCooGrid({ enabled: gridOn, color: "rgb(109,255,95)", opacity: 0.4 });
+                        aladin.setCooGrid({
+                            enabled: gridOn,
+                            color: "rgb(109,255,95)",
+                            opacity: 0.4,
+                        });
                     } else if (gridOn && aladin.showCooGrid) {
                         aladin.showCooGrid();
                     } else if (aladin.hideCooGrid) {
@@ -759,7 +816,8 @@
                         localStorage.setItem("dss-guide-seen", "1");
                     } catch (e) {}
                 }
-                el("tbGuide").onclick = () => (el("guide").hidden ? openGuide() : closeGuide());
+                el("tbGuide").onclick = () =>
+                    el("guide").hidden ? openGuide() : closeGuide();
                 el("guideClose").onclick = closeGuide;
                 el("guide").addEventListener("click", (e) => {
                     if (e.target === el("guide")) closeGuide();
