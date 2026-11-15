@@ -42,6 +42,11 @@ SPHEREx is mapping the entire sky in 102 bands of near-infrared light and repeat
 
 But there is far too much sky for one person to scan, and the data is hard to reach if you aren't a researcher. We built Space Finder 3000 so a curious student can pick a spot and start looking in a minute.
 
+# Demo Video
+Watch the video demonstration of the SPHEREx Coordinate Viewer:
+
+[▶ Watch the SPHEREx Viewer Demo on YouTube]([YOUR_YOUTUBE_LINK_HERE](https://youtu.be/FLa-YDJ30no))
+
 ## What you can do
 
 | You want to… | Space Finder 3000 gives you |
