@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://space-finder-3000.onrender.com/"><b>▶ Live website</b></a> ·
-  <a href="[video link]">30-second video</a> ·
+  <a href="https://www.youtube.com/watch?v=FLa-YDJ30no">30-second video</a> ·
   <a href="https://docs.google.com/presentation/d/19FWNbYBCe5dy4fP6lRDCuZEPNJt4_YItUPUjKZMTPqE/edit?usp=sharing">Slides</a>
 </p>
 
