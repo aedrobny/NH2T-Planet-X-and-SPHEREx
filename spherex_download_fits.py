@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """
-SPHEREx DR1 + QR3 local downloader and frame maker.
+SPHEREx DR1 + QR3 downloader and frame maker.
 
-Searches IRSA SIA2 (not TAP), downloads D4 spectral-image FITS cutouts,
-keeps the original FITS files, and creates PNG frames plus an animated GIF.
+Searches IRSA SIA2, then fetches detector D4 cutouts around the target:
+  - preferred: read only the needed pixels straight from NASA's public
+    AWS S3 bucket (nasa-irsa-spherex), several frames in parallel
+  - fallback: IRSA's cutout service (the original method)
+
+Keeps small FITS cutouts, creates PNG frames in time order, a frames
+index CSV, and an animated GIF.
 
 Example:
-  python3 spherex_download_frames.py --ra 269.44627 --dec 4.76820
+  python3 spherex_download_fits.py --ra 269.44627 --dec 4.76820
 
 Optional:
   --radius 0.06       Search radius in degrees (default 0.06)
-  --cutout 0.12       FITS cutout width in degrees (default 0.12)
-  --max-files 30      Maximum FITS files to download (default 30)
+  --cutout 0.12       Cutout width in degrees (default 0.12)
+  --max-files 30      Maximum frames, spread evenly over time (default 30)
+  --workers 6         Parallel downloads (default 6)
   --include-deep      Search DR1 and QR3 deep-field collections too
   --out ./spherex_data
 """
@@ -20,30 +26,46 @@ from __future__ import annotations
 
 import argparse
 import csv
-import io
+import json
 import math
 import re
 import sys
 import time
 import urllib.parse
+import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
 import requests
-from astropy.io import fits
-from astropy.coordinates import SkyCoord
 from astropy import units as u
+from astropy.coordinates import SkyCoord
+from astropy.io import fits
+from astropy.wcs import WCS, FITSFixedWarning
 from astroquery.ipac.irsa import Irsa
-from astropy.table import Table
 import matplotlib
 matplotlib.use("Agg")
 import imageio.v2 as imageio
 
-SIA_URL = "https://irsa.ipac.caltech.edu/SIA?"
-COLLECTIONS = ["spherex_dr1", "spherex_qr3"]
+try:
+    import s3fs  # noqa: F401  (lets astropy open s3:// paths)
+    HAVE_S3 = True
+except ImportError:
+    HAVE_S3 = False
+
+warnings.simplefilter("ignore", category=FITSFixedWarning)
+
+COLLECTIONS = ["spherex_dr1", "spherex_qr3"]  # DR1 first: preferred when both have an exposure
 DEEP_COLLECTIONS = ["spherex_dr1_deep", "spherex_qr3_deep"]
-USER_AGENT = "SPHEREx-local-downloader/1.0 (Python; FITS archive client)"
+USER_AGENT = "SPHEREx-local-downloader/1.1 (Python; FITS archive client)"
 RETRY_STATUS = {429, 500, 502, 503, 504}
+PIXEL_SCALE = 6.15  # SPHEREx arcsec per pixel
+FITS_ENDINGS = (".fits", ".fits.gz", ".fits.fz", ".fit", ".fit.gz", ".fit.fz",
+                ".fts", ".fts.gz", ".fts.fz")
+
+
+class OffImage(Exception):
+    """The target falls outside (or at the very edge of) this exposure."""
 
 
 def request_with_retries(session, method, url, *, params=None, stream=False,
@@ -73,19 +95,15 @@ def request_with_retries(session, method, url, *, params=None, stream=False,
     raise RuntimeError(f"Request failed after {attempts} attempts: {last_error}")
 
 
-def colname(table, wanted):
-    mapping = {str(name).lower(): name for name in table.colnames}
-    return mapping.get(wanted.lower())
+def cell(row, col):
+    """Read a table cell, returning None if the column is missing or masked."""
+    if col is None:
+        return None
+    value = row[col]
+    return None if np.ma.is_masked(value) else value
 
 
-def is_d4_url(url):
-    """Keep detector 4 products; filenames normally contain ...D4... and path /4/."""
-    path = urllib.parse.urlparse(url).path
-    name = Path(path).name.upper()
-    return bool(re.search(r"D4(?:_|\.|$)", name)) or bool(re.search(r"/4/", path))
-
-
-def query_collection(session, collection, ra, dec, radius):
+def query_collection(collection, ra, dec, radius):
     """Use the Astroquery SIA2 client, matching IRSA's official SPHEREx tutorial."""
     print(f"Searching {collection} around RA={ra:.6f}, Dec={dec:.6f}...")
     coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
@@ -101,14 +119,15 @@ def query_collection(session, collection, ra, dec, radius):
     names = {str(name).lower(): name for name in table.colnames}
     access_col = names.get("access_url")
     if access_col is None:
-        raise RuntimeError(
-            f"SIA2 table has no access_url column. Columns: {table.colnames}"
-        )
+        raise RuntimeError(f"SIA2 table has no access_url column. Columns: {table.colnames}")
+    cloud_col = names.get("cloud_access")
+    obs_col = names.get("obs_id")
+    time_col = names.get("t_min")
 
     rows = []
     for row in table:
-        value = row[access_col]
-        if value is np.ma.masked:
+        value = cell(row, access_col)
+        if value is None:
             continue
         url = str(value).strip()
         if not url or url.lower() in {"--", "none", "null"}:
@@ -123,10 +142,31 @@ def query_collection(session, collection, ra, dec, radius):
         path = urllib.parse.urlparse(url).path
         filename = Path(path).name.upper()
         # SPHEREx Level-2 names encode detector as _2D4_ (D4).
-        if re.search(r"_2D4(?:_|\\.|$)", filename) or re.search(r"/4/", path):
-            rows.append({"collection": collection, "url": url})
+        if not (re.search(r"D4(?:_|\.|$)", filename) or re.search(r"/4/", path)):
+            continue
 
-    print(f"  SIA2 observations: {len(table)}; D4 candidates: {len(rows)}")
+        # Path in NASA's S3 bucket, if IRSA provides one for this file
+        s3_path = None
+        raw_cloud = cell(row, cloud_col)
+        if raw_cloud is not None and str(raw_cloud).strip():
+            try:
+                aws = json.loads(str(raw_cloud))["aws"]
+                s3_path = f"{aws['bucket_name']}/{aws['key']}"
+            except (ValueError, KeyError, TypeError):
+                s3_path = None
+
+        obs_id = cell(row, obs_col)
+        t_min = cell(row, time_col)
+        rows.append({
+            "collection": collection,
+            "url": url,
+            "s3": s3_path,
+            "obs_id": "" if obs_id is None else str(obs_id),
+            "mjd": None if t_min is None else float(t_min),
+        })
+
+    with_s3 = sum(1 for r in rows if r["s3"])
+    print(f"  SIA2 observations: {len(table)}; D4 candidates: {len(rows)} ({with_s3} on AWS S3)")
     return rows
 
 
@@ -145,24 +185,25 @@ def add_cutout(url, ra, dec, size):
 
 def safe_name(url):
     name = Path(urllib.parse.urlparse(url).path).name
-    if not name.lower().endswith((".fits", ".fits.gz", ".fits.fz",
-                                  ".fit", ".fit.gz", ".fit.fz",
-                                  ".fts", ".fts.gz", ".fts.fz")):
+    if not name.lower().endswith(FITS_ENDINGS):
         name += ".fits"
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
 
 
-def download_fits(session, url, destination):
-    if destination.exists() and destination.stat().st_size > 2880:
-        try:
-            with fits.open(destination, memmap=False) as hdul:
-                hdul.verify("silentfix")
-            print(f"  Already downloaded: {destination.name}")
-            return True
-        except Exception:
-            print(f"  Existing file failed FITS validation; downloading again: {destination.name}")
-            destination.unlink(missing_ok=True)
+def valid_fits(path):
+    """True if the file exists and opens as FITS with some data in it."""
+    if not path.exists() or path.stat().st_size <= 2880:
+        return False
+    try:
+        with fits.open(path, memmap=False) as hdul:
+            hdul.verify("silentfix")
+            return any(hdu.data is not None for hdu in hdul)
+    except Exception:
+        return False
 
+
+def download_fits(session, url, destination):
+    """Original method: download an IRSA cutout over HTTPS."""
     response = request_with_retries(session, "GET", url, stream=True)
     temp = destination.with_suffix(destination.suffix + ".part")
     try:
@@ -171,18 +212,90 @@ def download_fits(session, url, destination):
                 if chunk:
                     handle.write(chunk)
         response.close()
-        if temp.stat().st_size <= 2880:
-            raise RuntimeError("Downloaded response is too small to be a FITS file.")
-        with fits.open(temp, memmap=False) as hdul:
-            hdul.verify("silentfix")
-            if not any(hdu.data is not None for hdu in hdul):
-                raise RuntimeError("FITS file contains no image/table data.")
+        if not valid_fits(temp):
+            raise RuntimeError("Downloaded response is not a usable FITS file.")
         temp.replace(destination)
-        print(f"  Saved {destination.name} ({destination.stat().st_size / 1024**2:.1f} MB)")
         return True
     except Exception:
         temp.unlink(missing_ok=True)
         raise
+
+
+def shift_header(header, x0, y0):
+    """Adjust a header so its WCS still matches after cropping at (x0, y0)."""
+    for key in ("BSCALE", "BZERO", "BLANK"):
+        header.pop(key, None)  # data is already scaled to real values
+    for key in list(header.keys()):
+        if re.fullmatch(r"CRPIX1[A-Z]?", key):
+            header[key] = header[key] - x0
+        elif re.fullmatch(r"CRPIX2[A-Z]?", key):
+            header[key] = header[key] - y0
+    return header
+
+
+def s3_cutout(s3_path, ra, dec, size_deg, destination):
+    """Read only the pixels around (ra, dec) from NASA's public S3 bucket."""
+    half = int(math.ceil(size_deg * 3600 / PIXEL_SCALE / 2)) + 2
+    with fits.open(f"s3://{s3_path}", use_fsspec=True,
+                   fsspec_kwargs={"anon": True}) as hdul:
+        primary = hdul[0].header
+        image = hdul["IMAGE"]
+        header = image.header.copy()
+        ny, nx = image.shape
+
+        x, y = WCS(header).world_to_pixel(SkyCoord(ra * u.deg, dec * u.deg))
+        if not (np.isfinite(x) and np.isfinite(y)):
+            raise OffImage("target is not on this exposure")
+        cx, cy = int(round(float(x))), int(round(float(y)))
+        x0, x1 = max(cx - half, 0), min(cx + half + 1, nx)
+        y0, y1 = max(cy - half, 0), min(cy + half + 1, ny)
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            raise OffImage("target is at the edge of this exposure")
+
+        # .section downloads only these rows/columns, not the whole file
+        data = np.array(image.section[y0:y1, x0:x1], dtype=np.float32)
+
+        # observation time often lives in the primary header; copy it over
+        for key in ("DATE-OBS", "MJD-OBS", "DATE-AVG", "MJD-AVG", "DATE-END"):
+            if key not in header and key in primary:
+                header[key] = primary[key]
+
+        hdus = [fits.PrimaryHDU(), fits.ImageHDU(data=data, header=shift_header(header, x0, y0), name="IMAGE")]
+        try:
+            flags_hdu = hdul["FLAGS"]
+            flags = np.array(flags_hdu.section[y0:y1, x0:x1])
+            hdus.append(fits.ImageHDU(data=flags, header=shift_header(flags_hdu.header.copy(), x0, y0), name="FLAGS"))
+        except KeyError:
+            pass
+
+    temp = destination.with_suffix(destination.suffix + ".part")
+    try:
+        fits.HDUList(hdus).writeto(temp, overwrite=True)
+        temp.replace(destination)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+
+
+def fetch_one(item, args, fits_dir):
+    """Get one cutout: S3 first, IRSA cutout service as a fallback."""
+    destination = fits_dir / f"{item['collection']}_{safe_name(item['url'])}"
+    if valid_fits(destination):
+        return destination, "already downloaded"
+
+    if item.get("s3") and HAVE_S3:
+        try:
+            s3_cutout(item["s3"], args.ra, args.dec, args.cutout, destination)
+            return destination, f"s3://{item['s3']}"
+        except OffImage:
+            raise
+        except Exception as exc:
+            print(f"  S3 read failed for {destination.name} ({exc}); using IRSA cutout instead")
+
+    cutout_url = add_cutout(item["url"], args.ra, args.dec, args.cutout)
+    with requests.Session() as session:
+        download_fits(session, cutout_url, destination)
+    return destination, cutout_url
 
 
 def find_image_hdus(hdul):
@@ -207,10 +320,8 @@ def find_image_hdus(hdul):
 
 def make_frame(fits_path, output_path):
     """
-    Render the original FITS IMAGE array at its native sampling.
-
-    This follows the notebook's clear inspection view:
-      - use the actual IMAGE pixels (no reprojection or 96/128-pixel resize)
+    Render the FITS IMAGE array at its native sampling:
+      - actual IMAGE pixels (no reprojection or resizing)
       - linear grayscale stretch using the 2nd and 99.5th percentiles
       - nearest-neighbour enlargement for display only
       - lossless PNG output
@@ -232,7 +343,6 @@ def make_frame(fits_path, output_path):
             print(f"  Image is all non-finite: {fits_path.name}")
             return None
 
-        # Match the notebook's native-image inspection stretch.
         lo, hi = np.nanpercentile(data[finite], [2.0, 99.5])
         if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
             lo = float(np.nanmin(data[finite]))
@@ -243,18 +353,13 @@ def make_frame(fits_path, output_path):
         scaled = np.clip((data - lo) / (hi - lo), 0.0, 1.0)
         scaled[~finite] = 0.0
 
-        # Enlarge with nearest-neighbour replication only. This makes small
-        # native cutouts easier to inspect without blending or inventing detail.
         display_scale = 3
         scaled = np.repeat(np.repeat(scaled, display_scale, axis=0),
                            display_scale, axis=1)
         pixels = np.round(scaled * 255).astype(np.uint8)
 
-        # Write a true, lossless grayscale PNG; no matplotlib figure cropping,
-        # interpolation, labels, or lossy WebP/JPEG compression.
         from PIL import Image
-        Image.fromarray(pixels, mode="L").save(output_path, format="PNG",
-                                               optimize=True)
+        Image.fromarray(pixels, mode="L").save(output_path, format="PNG", optimize=True)
 
         header = hdu.header
         ra = header.get("CRVAL1")
@@ -278,13 +383,15 @@ def make_frame(fits_path, output_path):
             "stretch_max": float(hi),
         }
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Download SPHEREx DR1/QR3 D4 FITS and make frames.")
+    parser = argparse.ArgumentParser(description="Download SPHEREx DR1/QR3 D4 cutouts and make frames.")
     parser.add_argument("--ra", type=float, default=269.44627, help="Target RA in degrees")
     parser.add_argument("--dec", type=float, default=4.76820, help="Target Dec in degrees")
     parser.add_argument("--radius", type=float, default=0.06, help="SIA2 search radius in degrees")
-    parser.add_argument("--cutout", type=float, default=0.12, help="FITS cutout size in degrees")
-    parser.add_argument("--max-files", type=int, default=30, help="Maximum files to download; 0 means no limit")
+    parser.add_argument("--cutout", type=float, default=0.12, help="Cutout size in degrees")
+    parser.add_argument("--max-files", type=int, default=30, help="Maximum frames (spread over time); 0 means no limit")
+    parser.add_argument("--workers", type=int, default=6, help="Parallel downloads")
     parser.add_argument("--include-deep", action="store_true", help="Also search DR1/QR3 deep collections")
     parser.add_argument("--out", type=Path, default=Path("spherex_data"), help="Output folder")
     args = parser.parse_args()
@@ -293,6 +400,7 @@ def main():
         parser.error("RA must be [0,360), Dec must be [-90,90].")
     if args.radius <= 0 or args.cutout <= 0:
         parser.error("Search radius and cutout size must be positive.")
+    args.workers = max(1, args.workers)
 
     root = args.out.expanduser().resolve()
     fits_dir = root / "fits"
@@ -300,77 +408,83 @@ def main():
     fits_dir.mkdir(parents=True, exist_ok=True)
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    session = requests.Session()
     collections = COLLECTIONS + (DEEP_COLLECTIONS if args.include_deep else [])
     found = []
     failures = []
+    started = time.time()
 
-    print("\nSPHEREx local downloader")
+    print("\nSPHEREx downloader")
     print(f"Target: RA {args.ra:.6f}°, Dec {args.dec:.6f}°")
     print(f"Search radius: {args.radius}° · cutout: {args.cutout}° · detector: D4")
+    print(f"Source: {'AWS S3 (IRSA fallback)' if HAVE_S3 else 'IRSA cutouts (install s3fs for AWS S3)'}")
     print(f"Output: {root}\n")
 
     for collection in collections:
         try:
-            found.extend(query_collection(session, collection, args.ra, args.dec, args.radius))
+            found.extend(query_collection(collection, args.ra, args.dec, args.radius))
         except Exception as exc:
             failures.append(f"{collection} search: {exc}")
             print(f"  WARNING: {exc}")
 
-    # Deduplicate identical direct access URLs.
+    # The same exposure can appear in DR1 and QR3; keep the first one found (DR1).
     unique = {}
     for item in found:
-        unique[item["url"]] = item
+        unique.setdefault(item["obs_id"] or item["url"], item)
     candidates = list(unique.values())
 
     if not candidates:
-        # If a previous run already downloaded FITS files, allow the processing
-        # stage to resume even when SIA2 currently returns no candidates.
-        existing_fits = sorted(p for p in fits_dir.glob("*") if p.is_file() and
-                               p.name.lower().endswith((".fits", ".fits.gz", ".fits.fz",
-                                                        ".fit", ".fit.gz", ".fit.fz",
-                                                        ".fts", ".fts.gz", ".fts.fz")))
+        existing_fits = sorted(p for p in fits_dir.glob("*")
+                               if p.is_file() and p.name.lower().endswith(FITS_ENDINGS))
         if existing_fits:
             print("\nSIA2 returned no new D4 candidates; reprocessing existing local FITS files.")
-            downloaded = [(path, path.name.split("_", 1)[0], "") for path in existing_fits]
+            downloaded = [(p, "_".join(p.name.split("_")[:2]), "", None) for p in existing_fits]
         else:
             print("\nNo D4 FITS files were found through SIA2.")
-            print("This can mean no matching D4 coverage, a temporary archive outage,")
-            print("or that the archive's SIA2 response uses a different detector URL pattern.")
+            print("This can mean no matching D4 coverage or a temporary archive outage.")
             for failure in failures:
                 print(" -", failure)
             print("\nTry again later, or run with --include-deep.")
             return 2
     else:
-        candidates.sort(key=lambda x: (x["collection"], x["url"]))
-        if args.max_files > 0:
-            candidates = candidates[:args.max_files]
-        print(f"\nUnique D4 files selected: {len(candidates)}")
+        # Time order, and spread evenly over time if there are more than max-files
+        candidates.sort(key=lambda x: (x["mjd"] is None, x["mjd"] or 0))
+        if args.max_files > 0 and len(candidates) > args.max_files:
+            idx = np.linspace(0, len(candidates) - 1, args.max_files).round().astype(int)
+            candidates = [candidates[i] for i in sorted(set(idx))]
+        print(f"\nUnique D4 exposures selected: {len(candidates)} · {args.workers} parallel workers")
 
         downloaded = []
-        for number, item in enumerate(candidates, 1):
-            cutout_url = add_cutout(item["url"], args.ra, args.dec, args.cutout)
-            filename = safe_name(item["url"])
-            # Prefix collection to avoid same-name collisions between releases.
-            destination = fits_dir / f"{item['collection']}_{filename}"
-            print(f"\n[{number}/{len(candidates)}] {item['collection']}")
-            try:
-                if download_fits(session, cutout_url, destination):
-                    downloaded.append((destination, item["collection"], cutout_url))
-            except Exception as exc:
-                failures.append(f"{item['url']}: {exc}")
-                print(f"  DOWNLOAD FAILED: {exc}")
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = {pool.submit(fetch_one, item, args, fits_dir): item for item in candidates}
+            for done, future in enumerate(as_completed(futures), 1):
+                item = futures[future]
+                try:
+                    path, source = future.result()
+                    downloaded.append((path, item["collection"], source, item["mjd"]))
+                    via = "S3" if source.startswith("s3://") else ("cached" if source == "already downloaded" else "IRSA")
+                    print(f"  [{done}/{len(candidates)}] {path.name} ({via})")
+                except OffImage as exc:
+                    print(f"  [{done}/{len(candidates)}] skipped: {exc}")
+                except Exception as exc:
+                    failures.append(f"{item['url']}: {exc}")
+                    print(f"  [{done}/{len(candidates)}] FAILED: {exc}")
+
+        downloaded.sort(key=lambda d: (d[3] is None, d[3] or 0))
+        print(f"\nDownloads finished in {time.time() - started:.1f}s")
+
+    # Remove frames from any earlier run so numbering stays clean
+    for old in frames_dir.glob("frame_*.png"):
+        old.unlink(missing_ok=True)
 
     frame_records = []
     gif_images = []
-    for number, (fits_path, collection, url) in enumerate(downloaded, 1):
+    for number, (fits_path, collection, source, _mjd) in enumerate(downloaded, 1):
         frame_path = frames_dir / f"frame_{number:04d}.png"
-        print(f"Making frame {number}/{len(downloaded)}: {fits_path.name}")
         try:
             record = make_frame(fits_path, frame_path)
             if record:
                 record["collection"] = collection
-                record["source_url"] = url
+                record["source_url"] = source
                 frame_records.append(record)
                 gif_images.append(imageio.imread(frame_path))
         except Exception as exc:
@@ -387,13 +501,11 @@ def main():
         gif_path = root / "spherex_blink.gif"
         imageio.mimsave(gif_path, gif_images, duration=0.65, loop=0)
         print("\nCOMPLETE")
-        print(f"FITS files: {fits_dir}")
-        print(f"PNG frames: {frames_dir}")
+        print(f"Frames created: {len(frame_records)} in {time.time() - started:.1f}s total")
         print(f"Frame index: {index_path}")
         print(f"Animated GIF: {gif_path}")
-        print(f"Frames created: {len(frame_records)}")
     else:
-        print("\nFITS downloads completed, but no displayable image frames were generated.")
+        print("\nNo displayable image frames were generated.")
 
     if failures:
         log_path = root / "download_errors.txt"

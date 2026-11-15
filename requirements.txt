@@ -5,3 +5,4 @@ requests
 imageio
 matplotlib
 pillow
+s3fs
