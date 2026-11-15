@@ -491,9 +491,11 @@
                 const AREA_RADIUS_DEG = 0.1;
 
                 const SURVEYS = [
-                    { id: "https://alasky.cds.unistra.fr/SPHEREx/D1", name: "SPHEREx D1" },
-                    { id: "P/allWISE/color", name: "AllWISE" },
-                    { id: "P/DSS2/color", name: "DSS optical" },
+                    { id: "https://skies.esac.esa.int/AllWISEColor", name: "AllWISE color (ESA mirror)" },
+                    { id: "https://irsa.ipac.caltech.edu/data/hips/CDS/AllWISE/W2", name: "AllWISE 4.6 µm (IRSA)" },
+                    { id: "https://irsa.ipac.caltech.edu/data/hips/CDS/2MASS/K", name: "2MASS 2.2 µm (IRSA)" },
+                    { id: "https://skies.esac.esa.int/DSSColor", name: "DSS optical (ESA mirror)" },
+                    { id: "https://alasky.cds.unistra.fr/SPHEREx/D1", name: "SPHEREx D1 (CDS)" },
                 ];
 
                 let aladin = null,
@@ -532,8 +534,10 @@
                     btn.setAttribute("aria-pressed", String(on));
                 }
 
-                if (window.A && A.init) {
-                    A.init
+                function startSky() {
+                    // A.init is a promise in most versions, a function in some
+                    const ready = typeof A.init === "function" ? A.init() : A.init;
+                    Promise.resolve(ready)
                         .then(() => {
                             const t = currentTarget();
                             aladin = A.aladin("#sky", {
@@ -541,6 +545,7 @@
                                 fov: 2.5,
                                 target: t ? `${t.ra} ${t.dec}` : "0 0",
                                 cooFrame: "ICRS",
+                                backgroundColor: "rgb(5, 7, 11)",
                                 showReticle: false,
                                 showZoomControl: false,
                                 showFullscreenControl: false,
@@ -565,9 +570,19 @@
                             console.warn("Sky map failed to load:", err);
                             skyInfo();
                         });
-                } else {
-                    skyInfo();
                 }
+
+                // wait up to 15 seconds for the viewer script to finish loading
+                let waited = 0;
+                (function waitForAladin() {
+                    if (window.A) return startSky();
+                    waited += 200;
+                    if (waited > 15000) {
+                        console.warn("Sky map failed to load: viewer script never loaded");
+                        return skyInfo();
+                    }
+                    setTimeout(waitForAladin, 200);
+                })();
 
                 // fly to the target on a new scan, a saved-target click, or a finished load
                 el("go").addEventListener("click", () => markTarget(true));

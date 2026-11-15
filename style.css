@@ -492,7 +492,7 @@ button { font: inherit; cursor: pointer; }
 .footer {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  bottom: 56px;
   z-index: 20;
   max-width: 240px;
   text-align: right;
