@@ -5,10 +5,11 @@ SPHEREx DR1 + QR3 downloader and frame maker.
 Searches IRSA SIA2, then fetches detector D4 cutouts around the target:
   - preferred: read only the needed pixels straight from NASA's public
     AWS S3 bucket (nasa-irsa-spherex), several frames in parallel
-  - fallback: IRSA's cutout service (the original method)
+  - fallback: IRSA's cutout service
 
-Keeps small FITS cutouts, creates PNG frames in time order, a frames
-index CSV, and an animated GIF.
+Frames are made as soon as each file arrives, and frames_index.csv is
+kept up to date (in time order) so the viewer can start playing early.
+Live progress is written to progress.json for the web page.
 
 Example:
   python3 spherex_download_fits.py --ra 269.44627 --dec 4.76820
@@ -57,7 +58,7 @@ warnings.simplefilter("ignore", category=FITSFixedWarning)
 
 COLLECTIONS = ["spherex_dr1", "spherex_qr3"]  # DR1 first: preferred when both have an exposure
 DEEP_COLLECTIONS = ["spherex_dr1_deep", "spherex_qr3_deep"]
-USER_AGENT = "SPHEREx-local-downloader/1.1 (Python; FITS archive client)"
+USER_AGENT = "SPHEREx-local-downloader/1.2 (Python; FITS archive client)"
 RETRY_STATUS = {429, 500, 502, 503, 504}
 PIXEL_SCALE = 6.15  # SPHEREx arcsec per pixel
 FITS_ENDINGS = (".fits", ".fits.gz", ".fits.fz", ".fit", ".fit.gz", ".fit.fz",
@@ -66,6 +67,48 @@ FITS_ENDINGS = (".fits", ".fits.gz", ".fits.fz", ".fit", ".fit.gz", ".fit.fz",
 
 class OffImage(Exception):
     """The target falls outside (or at the very edge of) this exposure."""
+
+
+def replace_with_retry(temp, final, attempts=10):
+    """Rename temp -> final; retry briefly if the server is reading the file (Windows)."""
+    for _ in range(attempts):
+        try:
+            temp.replace(final)
+            return True
+        except PermissionError:
+            time.sleep(0.1)
+    return False
+
+
+class Progress:
+    """Live scan status for the web page, saved as progress.json."""
+
+    def __init__(self, root):
+        self.path = root / "progress.json"
+        self.data = {
+            "stage": "searching",   # searching, downloading, processing, done, no_data, error
+            "total": 0,             # frames expected
+            "done": 0,              # frames ready to view
+            "downloaded": 0,
+            "sources": {"s3": 0, "irsa": 0, "cached": 0},
+            "skipped": 0,
+            "failed": 0,
+            "message": "",
+        }
+        self.write()
+
+    def update(self, **changes):
+        self.data.update(changes)
+        self.write()
+
+    def write(self):
+        self.data["updated"] = time.time()
+        temp = self.path.with_suffix(".json.part")
+        try:
+            temp.write_text(json.dumps(self.data), encoding="utf-8")
+            replace_with_retry(temp, self.path)
+        except OSError:
+            pass  # a missed update is fine; the next one will catch up
 
 
 def request_with_retries(session, method, url, *, params=None, stream=False,
@@ -155,6 +198,13 @@ def query_collection(collection, ra, dec, radius):
             except (ValueError, KeyError, TypeError):
                 s3_path = None
 
+        # IRSA didn't give a cloud path: derive it from the IRSA address,
+        # since the S3 bucket mirrors IRSA's folder layout
+        if s3_path is None:
+            marker = "/ibe/data/spherex/"
+            if marker in path:
+                s3_path = "nasa-irsa-spherex/" + path.split(marker, 1)[1]
+
         obs_id = cell(row, obs_col)
         t_min = cell(row, time_col)
         rows.append({
@@ -165,8 +215,7 @@ def query_collection(collection, ra, dec, radius):
             "mjd": None if t_min is None else float(t_min),
         })
 
-    with_s3 = sum(1 for r in rows if r["s3"])
-    print(f"  SIA2 observations: {len(table)}; D4 candidates: {len(rows)} ({with_s3} on AWS S3)")
+    print(f"  SIA2 observations: {len(table)}; D4 candidates: {len(rows)}")
     return rows
 
 
@@ -203,7 +252,7 @@ def valid_fits(path):
 
 
 def download_fits(session, url, destination):
-    """Original method: download an IRSA cutout over HTTPS."""
+    """Fallback: download an IRSA cutout over HTTPS."""
     response = request_with_retries(session, "GET", url, stream=True)
     temp = destination.with_suffix(destination.suffix + ".part")
     try:
@@ -281,7 +330,7 @@ def fetch_one(item, args, fits_dir):
     """Get one cutout: S3 first, IRSA cutout service as a fallback."""
     destination = fits_dir / f"{item['collection']}_{safe_name(item['url'])}"
     if valid_fits(destination):
-        return destination, "already downloaded"
+        return destination, "cached"
 
     if item.get("s3") and HAVE_S3:
         try:
@@ -296,6 +345,12 @@ def fetch_one(item, args, fits_dir):
     with requests.Session() as session:
         download_fits(session, cutout_url, destination)
     return destination, cutout_url
+
+
+def source_kind(source):
+    if source == "cached":
+        return "cached"
+    return "s3" if source.startswith("s3://") else "irsa"
 
 
 def find_image_hdus(hdul):
@@ -384,6 +439,157 @@ def make_frame(fits_path, output_path):
         }
 
 
+def time_order(records):
+    """Sort frame records by observation time (MJD, then date text)."""
+    return sorted(records, key=lambda r: (r["mjd"] == "", r["mjd"] if r["mjd"] != "" else 0,
+                                          str(r["observation"])))
+
+
+def write_index(index_path, records):
+    """Write frames_index.csv in time order, swapping it in all at once."""
+    ordered = time_order(records)
+    temp = index_path.with_suffix(".csv.part")
+    with temp.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(ordered[0].keys()))
+        writer.writeheader()
+        writer.writerows(ordered)
+    replace_with_retry(temp, index_path)
+    return ordered
+
+
+def run(args, root, fits_dir, frames_dir, progress):
+    collections = COLLECTIONS + (DEEP_COLLECTIONS if args.include_deep else [])
+    found = []
+    failures = []
+    started = time.time()
+    index_path = root / "frames_index.csv"
+
+    # Start clean so the page never shows frames from an earlier run
+    for old in frames_dir.glob("frame_*.png"):
+        old.unlink(missing_ok=True)
+    for name in ("frames_index.csv", "spherex_blink.gif"):
+        (root / name).unlink(missing_ok=True)
+
+    print("\nSPHEREx downloader")
+    print(f"Target: RA {args.ra:.6f}°, Dec {args.dec:.6f}°")
+    print(f"Search radius: {args.radius}° · cutout: {args.cutout}° · detector: D4")
+    print(f"Source: {'AWS S3 (IRSA fallback)' if HAVE_S3 else 'IRSA cutouts (install s3fs for AWS S3)'}")
+    print(f"Output: {root}\n")
+
+    progress.update(stage="searching")
+    for collection in collections:
+        try:
+            found.extend(query_collection(collection, args.ra, args.dec, args.radius))
+        except Exception as exc:
+            failures.append(f"{collection} search: {exc}")
+            print(f"  WARNING: {exc}")
+
+    # The same exposure can appear in DR1 and QR3; keep the first one found (DR1).
+    unique = {}
+    for item in found:
+        unique.setdefault(item["obs_id"] or item["url"], item)
+    candidates = list(unique.values())
+
+    records = []
+
+    def add_frame(fits_path, collection, source, mjd):
+        """Make a PNG right away and refresh the index so the page can use it."""
+        frame_path = frames_dir / f"frame_{len(records) + 1:04d}.png"
+        try:
+            record = make_frame(fits_path, frame_path)
+        except Exception as exc:
+            failures.append(f"Frame {fits_path.name}: {exc}")
+            print(f"  FRAME FAILED: {exc}")
+            return
+        if record:
+            record["collection"] = collection
+            record["source_url"] = source
+            record["mjd"] = "" if mjd is None else mjd
+            records.append(record)
+            write_index(index_path, records)
+
+    if not candidates:
+        existing_fits = sorted(p for p in fits_dir.glob("*")
+                               if p.is_file() and p.name.lower().endswith(FITS_ENDINGS))
+        if not existing_fits:
+            message = "No SPHEREx D4 exposures were found here (or IRSA is temporarily unavailable)."
+            print("\n" + message)
+            for failure in failures:
+                print(" -", failure)
+            progress.update(stage="no_data", message=message)
+            return 2
+
+        print("\nSIA2 returned no new D4 candidates; reprocessing existing local FITS files.")
+        progress.update(stage="downloading", total=len(existing_fits))
+        for path in existing_fits:
+            add_frame(path, "_".join(path.name.split("_")[:2]), "cached", None)
+            progress.data["sources"]["cached"] += 1
+            progress.update(downloaded=progress.data["downloaded"] + 1, done=len(records))
+    else:
+        # Time order, and spread evenly over time if there are more than max-files
+        candidates.sort(key=lambda x: (x["mjd"] is None, x["mjd"] or 0))
+        if args.max_files > 0 and len(candidates) > args.max_files:
+            idx = np.linspace(0, len(candidates) - 1, args.max_files).round().astype(int)
+            candidates = [candidates[i] for i in sorted(set(idx))]
+        print(f"\nUnique D4 exposures selected: {len(candidates)} · {args.workers} parallel workers")
+        progress.update(stage="downloading", total=len(candidates))
+
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = {pool.submit(fetch_one, item, args, fits_dir): item for item in candidates}
+            for done_count, future in enumerate(as_completed(futures), 1):
+                item = futures[future]
+                try:
+                    path, source = future.result()
+                except OffImage as exc:
+                    progress.data["skipped"] += 1
+                    print(f"  [{done_count}/{len(candidates)}] skipped: {exc}")
+                except Exception as exc:
+                    progress.data["failed"] += 1
+                    failures.append(f"{item['url']}: {exc}")
+                    print(f"  [{done_count}/{len(candidates)}] FAILED: {exc}")
+                else:
+                    kind = source_kind(source)
+                    progress.data["sources"][kind] += 1
+                    progress.data["downloaded"] += 1
+                    print(f"  [{done_count}/{len(candidates)}] {path.name} ({kind.upper()})")
+                    add_frame(path, item["collection"], source, item["mjd"])
+
+                # Expected total shrinks if some exposures turn out unusable
+                usable = len(candidates) - progress.data["skipped"] - progress.data["failed"]
+                progress.update(done=len(records), total=max(usable, len(records)))
+
+        print(f"\nDownloads finished in {time.time() - started:.1f}s")
+
+    if not records:
+        message = "Files were found, but no displayable frames could be made."
+        print("\n" + message)
+        progress.update(stage="error", message=message)
+        if failures:
+            (root / "download_errors.txt").write_text("\n\n".join(failures), encoding="utf-8")
+        return 1
+
+    # Final pass: index in time order, plus the animated GIF
+    progress.update(stage="processing", done=len(records), total=len(records))
+    ordered = write_index(index_path, records)
+    try:
+        gif_images = [imageio.imread(frames_dir / r["frame_file"]) for r in ordered]
+        imageio.mimsave(root / "spherex_blink.gif", gif_images, duration=0.65, loop=0)
+    except Exception as exc:
+        print(f"  GIF skipped: {exc}")  # frames near image edges can differ in size
+
+    print("\nCOMPLETE")
+    print(f"Frames created: {len(records)} in {time.time() - started:.1f}s total")
+    print(f"Frame index: {index_path}")
+
+    if failures:
+        log_path = root / "download_errors.txt"
+        log_path.write_text("\n\n".join(failures), encoding="utf-8")
+        print(f"\nSome operations failed; details saved to {log_path}")
+
+    progress.update(stage="done", done=len(records), total=len(records), message="")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download SPHEREx DR1/QR3 D4 cutouts and make frames.")
     parser.add_argument("--ra", type=float, default=269.44627, help="Target RA in degrees")
@@ -408,110 +614,12 @@ def main():
     fits_dir.mkdir(parents=True, exist_ok=True)
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    collections = COLLECTIONS + (DEEP_COLLECTIONS if args.include_deep else [])
-    found = []
-    failures = []
-    started = time.time()
-
-    print("\nSPHEREx downloader")
-    print(f"Target: RA {args.ra:.6f}°, Dec {args.dec:.6f}°")
-    print(f"Search radius: {args.radius}° · cutout: {args.cutout}° · detector: D4")
-    print(f"Source: {'AWS S3 (IRSA fallback)' if HAVE_S3 else 'IRSA cutouts (install s3fs for AWS S3)'}")
-    print(f"Output: {root}\n")
-
-    for collection in collections:
-        try:
-            found.extend(query_collection(collection, args.ra, args.dec, args.radius))
-        except Exception as exc:
-            failures.append(f"{collection} search: {exc}")
-            print(f"  WARNING: {exc}")
-
-    # The same exposure can appear in DR1 and QR3; keep the first one found (DR1).
-    unique = {}
-    for item in found:
-        unique.setdefault(item["obs_id"] or item["url"], item)
-    candidates = list(unique.values())
-
-    if not candidates:
-        existing_fits = sorted(p for p in fits_dir.glob("*")
-                               if p.is_file() and p.name.lower().endswith(FITS_ENDINGS))
-        if existing_fits:
-            print("\nSIA2 returned no new D4 candidates; reprocessing existing local FITS files.")
-            downloaded = [(p, "_".join(p.name.split("_")[:2]), "", None) for p in existing_fits]
-        else:
-            print("\nNo D4 FITS files were found through SIA2.")
-            print("This can mean no matching D4 coverage or a temporary archive outage.")
-            for failure in failures:
-                print(" -", failure)
-            print("\nTry again later, or run with --include-deep.")
-            return 2
-    else:
-        # Time order, and spread evenly over time if there are more than max-files
-        candidates.sort(key=lambda x: (x["mjd"] is None, x["mjd"] or 0))
-        if args.max_files > 0 and len(candidates) > args.max_files:
-            idx = np.linspace(0, len(candidates) - 1, args.max_files).round().astype(int)
-            candidates = [candidates[i] for i in sorted(set(idx))]
-        print(f"\nUnique D4 exposures selected: {len(candidates)} · {args.workers} parallel workers")
-
-        downloaded = []
-        with ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futures = {pool.submit(fetch_one, item, args, fits_dir): item for item in candidates}
-            for done, future in enumerate(as_completed(futures), 1):
-                item = futures[future]
-                try:
-                    path, source = future.result()
-                    downloaded.append((path, item["collection"], source, item["mjd"]))
-                    via = "S3" if source.startswith("s3://") else ("cached" if source == "already downloaded" else "IRSA")
-                    print(f"  [{done}/{len(candidates)}] {path.name} ({via})")
-                except OffImage as exc:
-                    print(f"  [{done}/{len(candidates)}] skipped: {exc}")
-                except Exception as exc:
-                    failures.append(f"{item['url']}: {exc}")
-                    print(f"  [{done}/{len(candidates)}] FAILED: {exc}")
-
-        downloaded.sort(key=lambda d: (d[3] is None, d[3] or 0))
-        print(f"\nDownloads finished in {time.time() - started:.1f}s")
-
-    # Remove frames from any earlier run so numbering stays clean
-    for old in frames_dir.glob("frame_*.png"):
-        old.unlink(missing_ok=True)
-
-    frame_records = []
-    gif_images = []
-    for number, (fits_path, collection, source, _mjd) in enumerate(downloaded, 1):
-        frame_path = frames_dir / f"frame_{number:04d}.png"
-        try:
-            record = make_frame(fits_path, frame_path)
-            if record:
-                record["collection"] = collection
-                record["source_url"] = source
-                frame_records.append(record)
-                gif_images.append(imageio.imread(frame_path))
-        except Exception as exc:
-            failures.append(f"Frame {fits_path.name}: {exc}")
-            print(f"  FRAME FAILED: {exc}")
-
-    if frame_records:
-        index_path = root / "frames_index.csv"
-        with index_path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(frame_records[0].keys()))
-            writer.writeheader()
-            writer.writerows(frame_records)
-
-        gif_path = root / "spherex_blink.gif"
-        imageio.mimsave(gif_path, gif_images, duration=0.65, loop=0)
-        print("\nCOMPLETE")
-        print(f"Frames created: {len(frame_records)} in {time.time() - started:.1f}s total")
-        print(f"Frame index: {index_path}")
-        print(f"Animated GIF: {gif_path}")
-    else:
-        print("\nNo displayable image frames were generated.")
-
-    if failures:
-        log_path = root / "download_errors.txt"
-        log_path.write_text("\n\n".join(failures), encoding="utf-8")
-        print(f"\nSome operations failed; details saved to {log_path}")
-    return 0 if frame_records else 1
+    progress = Progress(root)
+    try:
+        return run(args, root, fits_dir, frames_dir, progress)
+    except Exception as exc:
+        progress.update(stage="error", message=f"Scan failed: {exc}")
+        raise
 
 
 if __name__ == "__main__":

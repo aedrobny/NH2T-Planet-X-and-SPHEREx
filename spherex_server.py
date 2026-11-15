@@ -24,18 +24,32 @@ def coord_key(ra: float, dec: float) -> str:
     return f"ra_{ra:.5f}_dec_{dec:+.5f}"
 
 
+def read_progress(folder: Path) -> dict | None:
+    """Live progress written by the downloader, if any."""
+    try:
+        return json.loads((folder / "progress.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def target_info(folder: Path) -> dict:
     fits_dir, frames_dir = folder / "fits", folder / "frames"
     fits_count = sum(1 for p in fits_dir.iterdir() if p.is_file() and ".fit" in p.name.lower()) if fits_dir.exists() else 0
     frames = sorted(p.name for p in frames_dir.glob("*.png")) if frames_dir.exists() else []
+    has_index = (folder / "frames_index.csv").is_file()
+    progress = read_progress(folder)
+
     if folder.name in JOBS:
         status = "running"
-    elif frames and (folder / "frames_index.csv").is_file():
+    elif frames and has_index:
         status = "ready"
+    elif progress and progress.get("stage") in {"error", "no_data"}:
+        status = "error"
     elif fits_count:
         status = "needs_processing"
     else:
         status = "not_started"
+
     match = re.fullmatch(r"ra_([0-9]+(?:\.[0-9]+)?)_dec_([+-][0-9]+(?:\.[0-9]+)?)", folder.name)
     return {
         "key": folder.name,
@@ -45,6 +59,8 @@ def target_info(folder: Path) -> dict:
         "fits_count": fits_count,
         "frame_count": len(frames),
         "frames": frames,
+        "progress": progress,
+        "index_url": f"/spherex_data/{folder.name}/frames_index.csv" if has_index else None,
     }
 
 
@@ -56,7 +72,7 @@ def run_downloader(key: str, ra: float, dec: float) -> None:
             "--ra", str(ra), "--dec", str(dec),
             "--out", str(folder),
         ]
-        # Output stays in the server terminal; no extra status/log files are needed.
+        # Output stays in the server terminal; progress.json feeds the web page.
         subprocess.run(command, cwd=ROOT, check=False)
     finally:
         with LOCK:
@@ -92,10 +108,7 @@ class Handler(SimpleHTTPRequestHandler):
             folder = DATA / key
             if not folder.is_dir():
                 return self.send_json({"error": "Target not found."}, 404)
-            info = target_info(folder)
-            index = folder / "frames_index.csv"
-            info["index_url"] = f"/spherex_data/{key}/frames_index.csv" if index.is_file() else None
-            return self.send_json(info)
+            return self.send_json(target_info(folder))
         return super().do_GET()
 
     def do_POST(self):
@@ -113,7 +126,6 @@ class Handler(SimpleHTTPRequestHandler):
         DATA.mkdir(exist_ok=True)
         key = coord_key(ra, dec)
         folder = DATA / key
-        # This is the automatic coordinate-folder creation requested for the UI.
         (folder / "fits").mkdir(parents=True, exist_ok=True)
         (folder / "frames").mkdir(parents=True, exist_ok=True)
         with LOCK:
@@ -128,6 +140,6 @@ if __name__ == "__main__":
     if not DOWNLOADER.is_file():
         raise SystemExit(f"Downloader not found: {DOWNLOADER}")
     DATA.mkdir(exist_ok=True)
-    print(f"Open http://{HOST}:{PORT}/index.html")
+    print(f"Open http://127.0.0.1:{PORT}/index.html")
     print("Leave this terminal open while using the viewer. Press Ctrl+C to stop.")
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

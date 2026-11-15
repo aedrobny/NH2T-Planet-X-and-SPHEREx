@@ -54,6 +54,10 @@
                 <div class="window-title">SPHEREx Imaging</div>
                 <div class="window-body">
                     <div class="readout"><span class="field-label">Observation position</span><span id="coords" class="mono">Awaiting target</span></div>
+                    <div id="loadBanner" class="load-banner" hidden aria-live="polite">
+                        <span id="loadBannerText"></span>
+                        <button id="loadAllBtn" type="button" class="btn" hidden>Load all frames</button>
+                    </div>
                     <div id="stage" class="viewer">
                         <canvas id="cv" width="576" height="576"></canvas>
                         <canvas id="ov" width="576" height="576" class="overlay-canvas" aria-hidden="true"></canvas>
@@ -97,7 +101,7 @@
         <div id="skyInfo" class="sky-info">Loading sky…</div>
         <footer class="footer">Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive and AWS Open Data.</footer>
 
-        <!-- mission briefing (old hero + steps), opens from the Guide button -->
+        <!-- mission briefing (headline + steps), opens from the Guide button -->
         <div id="guide" class="guide" hidden>
             <section class="window guide-card" role="dialog" aria-modal="true" aria-labelledby="guideTitle">
                 <div class="window-title">Mission Briefing</div>
@@ -126,15 +130,19 @@
                 key: null,
                 poll: null,
                 hasImage: false,
+                partial: false,
+                total: 0,
             };
             const cv = $("cv"),
                 cx = cv.getContext("2d"),
                 ov = $("ov"),
                 oc = ov.getContext("2d");
+            const MIN_START_FRAMES = 10;
+
             function message(t) {
                 $("msg").textContent = t || "";
                 const busy =
-                    /checking|loading|starting|creating|waiting|resuming|scanning|downloading|processing|retrieving/i.test(
+                    /checking|loading|starting|creating|waiting|resuming|scanning|searching|downloading|processing|retrieving|finishing/i.test(
                         t || "",
                     );
                 if (busy && !S.hasImage) $("emptyState").hidden = true;
@@ -188,7 +196,15 @@
             }
             async function api(url, opts = {}) {
                 const r = await fetch(url, { cache: "no-store", ...opts });
-                const data = await r.json();
+                const text = await r.text();
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch {
+                    throw new Error(
+                        `server replied ${r.status} ${r.statusText} with a non-JSON page: ${text.slice(0, 120)}`,
+                    );
+                }
                 if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
                 return data;
             }
@@ -215,7 +231,7 @@
                         const m = t.key.match(/^ra_([0-9.]+)_dec_([+-][0-9.]+)$/);
                         if (m) {
                             $("ra").value = m[1];
-                            $("dec").value = Number(m[2]).toString();
+                            $("dec").value = m[2];
                             loadOrScan(Number(m[1]), Number(m[2]));
                         }
                     };
@@ -230,15 +246,53 @@
                     message("Could not reach the SPHEREx server: " + e.message);
                 }
             }
-            async function loadTarget(key) {
+
+            // ---- live progress bar ----
+            function progressText(d) {
+                const p = d.progress;
+                if (!p)
+                    return `SPHEREx ${d.status.replaceAll("_", " ")} · ${d.fits_count} FITS · ${d.frame_count} PNG frames`;
+                const s = p.sources || {};
+                const parts = [];
+                if (s.s3) parts.push(["AWS", s.s3]);
+                if (s.irsa) parts.push(["IRSA", s.irsa]);
+                if (s.cached) parts.push(["CACHE", s.cached]);
+                const names = { AWS: "AWS S3", IRSA: "IRSA", CACHE: "LOCAL CACHE" };
+                let source = "SOURCE: —";
+                if (parts.length === 1) source = "SOURCE: " + names[parts[0][0]];
+                else if (parts.length > 1) source = "SOURCE: " + parts.map(([n, c]) => `${n} ${c}`).join(" · ");
+                const frames = `[Frames ${p.done || 0}/${p.total || "?"}]`;
+                switch (p.stage) {
+                    case "searching": return "SEARCHING IRSA ARCHIVE…";
+                    case "downloading": return `LOADING… ${source} ${frames}`;
+                    case "processing": return `FINISHING… ${frames}`;
+                    case "done": return `COMPLETE · ${source} ${frames}`;
+                    case "error":
+                    case "no_data": return p.message || "Scan failed.";
+                    default: return `${String(p.stage).toUpperCase()} ${frames}`;
+                }
+            }
+            function showBanner(text, { complete = false, button = false } = {}) {
+                $("loadBannerText").textContent = text;
+                $("loadBanner").classList.toggle("complete", complete);
+                $("loadAllBtn").hidden = !button;
+                $("loadBanner").hidden = false;
+            }
+            function hideBanner() {
+                $("loadBanner").hidden = true;
+                $("loadAllBtn").hidden = true;
+            }
+
+            async function loadTarget(key, partial = false) {
                 const info = await api("/api/target/" + encodeURIComponent(key));
-                if (info.status !== "ready")
+                if (!partial && info.status !== "ready")
                     throw new Error(
                         info.status === "needs_processing"
                             ? "Saved FITS files found; processing is incomplete."
                             : "No processed frames are available yet.",
                     );
-                const csv = await fetch(info.index_url, { cache: "no-store" });
+                if (!info.index_url) throw new Error("No frame index is available yet.");
+                const csv = await fetch(info.index_url + "?v=" + Date.now(), { cache: "no-store" });
                 if (!csv.ok) throw new Error("Frame index CSV could not be read.");
                 S.frames = parseCSV(await csv.text())
                     .map((x) => ({ ...x, file: x.frame_file || x.file }))
@@ -247,14 +301,19 @@
                     throw new Error("The frame index contains no PNG frames.");
                 S.key = key;
                 S.i = 0;
+                S.partial = partial;
+                S.total = info.progress?.total || S.frames.length;
                 stopPlay();
                 $("sl").min = 0;
                 $("sl").max = S.frames.length - 1;
                 $("sl").value = 0;
-                $("dataset").textContent =
-                    `${S.frames.length} local PNG frames · ${info.fits_count} FITS files · ${key}`;
-                $("cand").textContent =
-                    "Showing processed SPHEREx PNG observations from this saved coordinate target.";
+                $("dataset").textContent = partial
+                    ? `${S.frames.length} of ${S.total} frames loaded (more downloading) · ${key}`
+                    : `${S.frames.length} local PNG frames · ${info.fits_count} FITS files · ${key}`;
+                $("cand").textContent = partial
+                    ? "Playing the first frames while the rest download."
+                    : "Showing processed SPHEREx PNG observations from this saved coordinate target.";
+                if (!partial) hideBanner();
                 paintFrame();
             }
             function dateOf(f) {
@@ -321,8 +380,36 @@
                 }, 600);
                 $("pl").textContent = "❚❚ Pause";
             };
+            $("loadAllBtn").onclick = async () => {
+                if (!S.key) return;
+                try {
+                    await loadTarget(S.key);
+                    message("All frames loaded.");
+                } catch (e) {
+                    message(e.message);
+                }
+            };
+
             async function loadOrScan(ra, dec) {
                 stopPlay();
+                if (S.poll) clearInterval(S.poll);
+                S.poll = null;
+                // clear the previous target so its frames don't look like the new results
+                S.frames = [];
+                S.key = null;
+                S.i = 0;
+                S.hasImage = false;
+                S.partial = false;
+                cx.clearRect(0, 0, cv.width, cv.height);
+                hideBanner();
+                $("hud").textContent = "";
+                $("info").textContent = "Awaiting scan results…";
+                $("frameInfo").textContent = "No frame loaded";
+                $("coords").textContent = `RA ${ra.toFixed(5)}° · DEC ${dec.toFixed(5)}°`;
+                $("sl").max = 0;
+                $("sl").value = 0;
+                $("emptyState").hidden = false;
+
                 message("Checking saved coordinate library…");
                 $("cand").textContent =
                     "Checking whether this coordinate already has downloaded or processed data.";
@@ -360,32 +447,61 @@
                     $("cand").textContent = "Check the service logs for details.";
                 }
             }
+
             async function waitForTarget(key) {
                 if (S.poll) clearInterval(S.poll);
+                S.poll = null;
+                let finished = false;
+                let busy = false;
                 const check = async () => {
+                    if (busy || finished) return;
+                    busy = true;
                     try {
                         const d = await api("/api/target/" + encodeURIComponent(key));
-                        message(
-                            `SPHEREx ${d.status.replaceAll("_", " ")} · ${d.fits_count} FITS · ${d.frame_count} PNG frames`,
-                        );
+                        const text = progressText(d);
+                        const total = d.progress?.total || 0;
                         await refreshTargets();
+
                         if (d.status === "ready") {
-                            clearInterval(S.poll);
+                            finished = true;
+                            if (S.poll) clearInterval(S.poll);
                             S.poll = null;
-                            await loadTarget(key);
-                            message("Scan complete. Target loaded.");
+                            if (S.key === key && S.partial) {
+                                showBanner(`All ${d.frame_count} frames downloaded.`, { complete: true, button: true });
+                                $("cand").textContent =
+                                    "Download complete. Press “Load all frames” to restart the viewer with every frame in time order.";
+                            } else {
+                                await loadTarget(key);
+                                message("Scan complete. Target loaded.");
+                            }
                         } else if (d.status === "error") {
-                            clearInterval(S.poll);
+                            finished = true;
+                            if (S.poll) clearInterval(S.poll);
                             S.poll = null;
-                            message("Scan failed. Check the service logs for details.");
+                            hideBanner();
+                            message(d.progress?.message || "Scan failed. Check the service logs for details.");
+                            $("cand").textContent = "Check the service logs for details.";
+                        } else {
+                            const enough =
+                                total > 0 && d.index_url && d.frame_count >= Math.min(MIN_START_FRAMES, total);
+                            if (enough && S.key !== key) await loadTarget(key, true);
+                            if (S.key === key && S.partial) {
+                                showBanner(`Playing ${S.frames.length} of ${total} · ${text}`);
+                            } else {
+                                showBanner(text);
+                                message(text);
+                            }
                         }
                     } catch (e) {
                         message(e.message);
+                    } finally {
+                        busy = false;
                     }
                 };
                 await check();
-                if (!S.poll) S.poll = setInterval(check, 2000);
+                if (!finished) S.poll = setInterval(check, 2000);
             }
+
             $("go").onclick = () => {
                 const ra = Number($("ra").value),
                     dec = Number($("dec").value);
@@ -476,12 +592,12 @@
             })();
         </script>
 
-        <!-- interactive sky (Aladin Lite by CDS) -->
+        <!-- interactive sky viewer (Aladin Lite by CDS), loaded as a module -->
         <script type="module">
-        import A from "https://cdn.jsdelivr.net/npm/aladin-lite@3.6.5/dist/aladin.js";
-        window.A = A;
+            import A from "https://cdn.jsdelivr.net/npm/aladin-lite@3.6.5/dist/aladin.js";
+            window.A = A;
         </script>
-        <script type=""module>
+        <script type="module">
             // Sky map, scan-area marker, toolbar and mission briefing.
             (function () {
                 const el = (id) => document.getElementById(id);
@@ -490,6 +606,7 @@
                 // set this to match the cutout size your scan produces
                 const AREA_RADIUS_DEG = 0.1;
 
+                // NASA's IRSA copies first; others are backups if a server is down
                 const SURVEYS = [
                     { id: "https://irsa.ipac.caltech.edu/data/hips/CDS/AllWISE/RGB-W4-W2-W1", name: "AllWISE color (IRSA)" },
                     { id: "https://irsa.ipac.caltech.edu/data/hips/CDS/2MASS/Color", name: "2MASS color (IRSA)" },
