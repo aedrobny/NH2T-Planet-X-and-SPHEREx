@@ -110,7 +110,7 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 
 ## AI usage
 
-- **In the product:** none yet. The current prototype shows real SPHEREx data with no AI-generated content.
+- **In the product:** None yet. The current prototype shows real SPHEREx data with no AI-generated content.
 - **In development:** Used AI to proofread and assist with debugging code.
 - When AI descriptions are added (in the future), we'll label them as AI-generated, because they are a starting point and not a verified scientific result.
 
