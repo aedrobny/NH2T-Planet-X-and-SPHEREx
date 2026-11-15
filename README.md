@@ -1,9 +1,10 @@
 <!-- Before submitting: search this file for "[" and fill in or delete every bracket. -->
 
-<img width="1469" height="714" alt="Screenshot 2026-11-14 at 3 24 05 PM" src="https://github.com/user-attachments/assets/06e5837d-25d9-4869-a111-09d3276e14ec" />
+<img width="1050" height="140" alt="Screenshot 2026-11-14 at 7 34 58 PM" src="https://github.com/user-attachments/assets/a2c3ee94-6611-47b2-bd99-d1018567e016" />
 
 
-<h1 align="center">Space Explorer 3000 [TEMP]</h1>
+
+<h1 align="center">Space Finder 3000</h1>
 
 <p align="center">
   <b>Watch the sky <i>move</i>.</b><br>
