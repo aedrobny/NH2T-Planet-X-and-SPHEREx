@@ -159,6 +159,7 @@ source .venv/bin/activate
 ```bash
 python -m pip install --upgrade pip
 python -m pip install astroquery astropy numpy requests imageio matplotlib pillow
+pip install -r requirements.txt
 ```
 
 ### 4. Start the local server
