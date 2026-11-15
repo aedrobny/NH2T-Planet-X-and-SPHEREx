@@ -201,4 +201,4 @@ Visit: http://127.0.0.1:8000/index.html
 
 Thanks to NASA, the SPHEREx team, IPAC/IRSA, and the NASA Space Apps Challenge organizers and mentors.
 
-License: Space Finder 3000
+License: MIT
