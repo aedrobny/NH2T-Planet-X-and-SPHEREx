@@ -73,16 +73,6 @@ But there is far too much sky for one person to scan, and the data is hard to re
 
 <!-- Verify these positions work in the live tool before submitting. They are J2000 positions, and fast movers have drifted since, so a star may sit off-center. -->
 
-## See it in action
-
-<table>
-  <tr>
-    <td><img src="screenshot-aim.png" alt="[describe]"><br><sub><i>[Caption: entering a spot in the sky]</i></sub></td>
-    <td><img src="screenshot-frames.png" alt="[describe]"><br><sub><i>[Caption: stepping through frames in time order]</i></sub></td>
-    <td><img src="screenshot-mover.png" alt="[describe]"><br><sub><i>[Caption: a star that shifted between frames]</i></sub></td>
-  </tr>
-</table>
-
 ## How it works
 
 <!-- NOTE: swap the mermaid diagram below for your UML diagram when it's ready. -->
