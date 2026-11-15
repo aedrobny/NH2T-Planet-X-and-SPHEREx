@@ -45,7 +45,7 @@ But there is far too much sky for one person to scan, and the data is hard to re
 # Demo Video
 Watch the video demonstration of the SPHEREx Coordinate Viewer:
 
-[▶ Watch the SPHEREx Viewer Demo on YouTube]([YOUR_YOUTUBE_LINK_HERE](https://youtu.be/FLa-YDJ30no))
+[▶ Watch the SPHEREx Viewer Demo on YouTube](https://youtu.be/FLa-YDJ30no)
 
 ## What you can do
 
