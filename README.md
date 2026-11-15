@@ -52,8 +52,8 @@ But there is far too much sky for one person to scan, and the data is hard to re
 | Make faint things easier to see | An image stretch that changes visibility, never the underlying measurements |
 | Read the image like a sky map | **North is up and east is to the left** |
 | Know what you're looking at | Plain notes in the app: every frame is a real observation, and the sequence is separate observations, not video |
-| Come back to a spot | A list of saved coordinate targets [confirm how targets get saved] |
-| Know where you are in the sky | A survey grid / area guide [describe what it shows] |
+| Come back to a spot | A list of saved coordinate targets below the Right Ascension and Declination input |
+| Know where you are in the sky | A survey grid / area guide that helps navigation |
 
 **Keyboard shortcuts:** arrow keys step through frames · Shift + arrows jump five frames · Space plays or pauses
 
@@ -93,34 +93,15 @@ flowchart LR
 ## What's different
 
 - **Honest about the data.** The app tells you each frame is a real observation, that the sequence is separate observations and not video, and that the image stretch never changes the measurements.
-- **Built for beginners.** A simple Aim, Scan, Explore flow and plain labels instead of a wall of controls.
+- **Built for ease.** A simple coordinate input and plain labels instead of a wall of complex controls.
 - **Mission-control feel.** A frame counter, timeline and status readouts that make exploring the sky feel like an expedition.
 
 ## Honest limits
 
 - The sequence is separate observations taken at different times, not continuous video, so expect gaps between frames.
-- For now you search by coordinates only. Name search is planned (see [What's next](#whats-next)).
 - Very slow movers can shift by less than one pixel between images, so they can look like they're standing still.
 - SPHEREx sees the sky through a variable filter, so a star's brightness differs from image to image. A brightness change only means something when comparing the same band.
 - The IRSA API occasionally bugs out/crashes and does not display data.
-- [Add anything specific to your prototype, such as slow scans or limited coverage.]
-
-## Future Concepts
-
-The prototype gets real SPHEREx frames in front of anyone. Next we want to make the sky easier to find and easier to understand, using a large language model (LLM):
-
-- **Search by name.** Type "Barnard's Star" and the tool works out the coordinates, so nobody needs to know RA and Dec.
-- **Plain-language descriptions.** The LLM writes a short, friendly description of the patch of sky you're viewing and what to look for.
-- **Name the objects in view.** The LLM identifies the stars and other objects in the field and explains what they are.
-- **Keep the AI honest.** Names and facts would come from a real catalog (such as SIMBAD), with the model only putting them into plain language, so it never has to guess.
-- **Multiple Viewpoints.** Ability to open multiple windows, each letting you view multiple stars side by side and display their movements.
-- **More Data.** The data from other space telescopes, such as the data from the Gaia and WISE missions.
-- **Sharing Observations.** Copy the link in the URL bar to share a view with your peers.
-- **Motion Highlighting.** Mark or color anything that shifts between observations, so movers stand out without hunting for them.
-- **Measuring Motion.** Click a star in two frames and see how far and how fast it moved.
-- **Exporting Sequences.** Save a set of frames as a GIF to share.
-- **Mobile Support.** A layout that works on phones and tablets.
-- [Other ideas, such as highlighting movers automatically or shareable links to a spot.]
 
 ## Data and credits
 
@@ -130,7 +111,6 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 
 - **In the product:** none yet. The current prototype shows real SPHEREx data with no AI-generated content. LLM features are planned (see [What's next](#whats-next)).
 - **In development:** Used AI to proofread and assist with debugging code.
-- When AI descriptions are added (in the future), we'll label them as AI-generated, because they are a starting point and not a verified scientific result.
 
 ## Team
 
