@@ -113,6 +113,7 @@ flowchart LR
 - Very slow movers can shift by less than one pixel between images, so they can look like they're standing still.
 - SPHEREx sees the sky through a variable filter, so a star's brightness differs from image to image. A brightness change only means something when comparing the same band.
 - The tool shows you the images. Spotting what moved is still up to you, and we don't claim to have found Planet X or any new object.
+- The IRSA IPA occasionally bugs out/crashes and does not display data. This error is hard to work around, and we were unable to fix it at the moment.
 - [Add anything specific to your prototype, such as slow scans or limited coverage.]
 
 ## What's next
@@ -122,7 +123,9 @@ The prototype gets real SPHEREx frames in front of anyone. Next we want to make 
 - **Search by name.** Type "Barnard's Star" and the tool works out the coordinates, so nobody needs to know RA and Dec.
 - **Plain-language descriptions.** The LLM writes a short, friendly description of the patch of sky you're viewing and what to look for.
 - **Name the objects in view.** The LLM identifies the stars and other objects in the field and explains what they are.
-- **Keep the AI honest.** Names and facts would come from a real catalog (such as SIMBAD), with the model only putting them into plain language, so it never has to guess. [Delete this line if it isn't your plan.]
+- **Keep the AI honest.** Names and facts would come from a real catalog (such as SIMBAD), with the model only putting them into plain language, so it never has to guess.
+- **Multiple Viewpoints.** Ability to open multiple windows, each letting you view multiple stars side by side and display their movements.
+- **AI Assistance.** A chat bot that can give you quick directions, as many locations of any stars you want, and more.
 - [Other ideas, such as highlighting movers automatically or shareable links to a spot.]
 
 ## Data and credits
@@ -132,8 +135,8 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 ## AI usage
 
 - **In the product:** none yet. The current prototype shows real SPHEREx data with no AI-generated content. LLM features are planned (see [What's next](#whats-next)).
-- **In development:** [Describe any AI tools used to write code, copy or documentation.]
-- When AI descriptions are added, we'll label them as AI-generated, because they are a starting point and not a verified scientific result.
+- **In development:** Used AI to proofread and assist with debugging code.
+- When AI descriptions are added (in the future), we'll label them as AI-generated, because they are a starting point and not a verified scientific result.
 
 ## Team
 
@@ -156,4 +159,4 @@ Images: NASA SPHEREx via the NASA/IPAC Infrared Science Archive (IRSA) and AWS O
 
 Thanks to NASA, the SPHEREx team, IPAC/IRSA, and the NASA Space Apps Challenge organizers and mentors.
 
-License: [e.g., MIT]
+License: Space Finder 3000
