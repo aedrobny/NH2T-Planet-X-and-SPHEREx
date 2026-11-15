@@ -114,6 +114,7 @@ flowchart LR
 - SPHEREx sees the sky through a variable filter, so a star's brightness differs from image to image. A brightness change only means something when comparing the same band.
 - The tool shows you the images. Spotting what moved is still up to you, and we don't claim to have found Planet X or any new object.
 - The IRSA IPA occasionally bugs out/crashes and does not display data. This error is hard to work around, and we were unable to fix it at the moment.
+- We ran low on time, forcing us to leave out some features and improvements we would have liked to add. Some of the features we would have liked to implement can be seen in the "What's Next" section below.
 - [Add anything specific to your prototype, such as slow scans or limited coverage.]
 
 ## What's next
@@ -125,7 +126,16 @@ The prototype gets real SPHEREx frames in front of anyone. Next we want to make 
 - **Name the objects in view.** The LLM identifies the stars and other objects in the field and explains what they are.
 - **Keep the AI honest.** Names and facts would come from a real catalog (such as SIMBAD), with the model only putting them into plain language, so it never has to guess.
 - **Multiple Viewpoints.** Ability to open multiple windows, each letting you view multiple stars side by side and display their movements.
-- **AI Assistance.** A chat bot that can give you quick directions, as many locations of any stars you want, and more.
+- **AI Assistance.** A chatbot that can give quick directions and find the locations of any stars you ask about, and more.
+- **More Data.** The data from other space telescopes, such as the data from the Gaia and WISE missions.
+- **Sharing Observations.** Copy the link in the URL bar to share a view with your peers.
+- **Saving Observations.** Bookmark locations and build a library of saved targets, and copy observations over to other websites.
+- **Motion Highlighting.** Mark or color anything that shifts between observations, so movers stand out without hunting for them.
+- **Measuring Motion.** Click a star in two frames and see how far and how fast it moved.
+- **Current Star Positions.** Use Gaia data so fast-moving stars are centered correctly.
+- **Guided Missions.** Preset targets with hints, like "find the star that moves," for classrooms and beginners.
+- **Exporting Sequences.** Save a set of frames as a GIF to share.
+- **Mobile Support.** A layout that works on phones and tablets.
 - [Other ideas, such as highlighting movers automatically or shareable links to a spot.]
 
 ## Data and credits
