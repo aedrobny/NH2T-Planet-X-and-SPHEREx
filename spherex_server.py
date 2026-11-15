@@ -13,7 +13,7 @@ from urllib.parse import unquote, urlparse
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "spherex_data"
 DOWNLOADER = ROOT / "spherex_download_fits.py"
-HOST, PORT = "127.0.0.1", 8765
+HOST, PORT = "0.0.0.0", int(os.environ.get("PORT", 8000))
 LOCK = threading.Lock()
 JOBS: set[str] = set()
 KEY_RE = re.compile(r"ra_[0-9]+(?:\.[0-9]+)?_dec_[+-][0-9]+(?:\.[0-9]+)?")
