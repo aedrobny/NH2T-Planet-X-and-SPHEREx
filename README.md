@@ -32,7 +32,9 @@
 </p>
 <!-- Record a 5-10 second GIF: enter coordinates, scan, press play. Save it as demo.gif next to this file. -->
 
-**Jump to:** [Why this exists](#why-this-exists) · [What you can do](#what-you-can-do) · [Try it](#try-it-in-3-steps) · [How it works](#how-it-works) · [What's different](#whats-different) · [Limits](#honest-limits) · [What's next](#whats-next) · [Data and Credits](#data-and-credits) · [AI usage](#ai-usage) · [Team](#team) · [Run it Locally](#run-it-locally)
+**Jump to:** [Why this exists](#why-this-exists) · [What you can do](#what-you-can-do) · [Try it](#try-it-in-3-steps) · [How it works](#how-it-works) · [What's different](#whats-different) · [Limits](#honest-limits) · [What's next](#whats-next) · [Data and Credits](#data-and-credits) · [AI usage](#ai-usage) · [Team](#team) · [Run it Locally](#run-it-locally) · [Good First Targets](#good-first-targets)· [Notes](#notes) · [Acknowledgements and License](#acknowledgements-and-license)
+notes
+acknowledgement and license
 
 ---
 
@@ -199,7 +201,7 @@ spherex_data/
 - Folder names use five decimal places and include an explicit `+` for positive declination.
 - The local server listens only on `127.0.0.1`.
 
-## Acknowledgments and license
+## Acknowledgements and license
 
 Thank you to NASA, the SPHEREx team, IPAC/IRSA, and the NASA Space Apps Challenge organizers and mentors.
 
