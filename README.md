@@ -75,17 +75,7 @@ But there is far too much sky for one person to scan, and the data is hard to re
 
 ## How it works
 
-<!-- NOTE: swap the mermaid diagram below for your UML diagram when it's ready. -->
-
-```mermaid
-flowchart LR
-    A[Enter RA and Dec] --> B[Scan: find and download SPHEREx observations of that spot]
-    B --> C[Process the frames, north up]
-    C --> D[Step or play through time]
-    N[Planned: type a name] -.-> A
-    L[Planned: AI description and object names] -.-> D
-```
-<!-- Confirm this flow with your developer and edit the boxes to match what the code really does. -->
+<img width="728" height="282" alt="Screenshot 2026-11-15 at 2 53 49 PM" src="https://github.com/user-attachments/assets/5a3d27d1-4716-456d-985d-e64ae233a7b4" />
 
 **Images:** NASA SPHEREx data from the NASA/IPAC Infrared Science Archive (IRSA) and AWS Open Data.
 **Stack:** [languages, libraries, hosting]
