@@ -52,8 +52,8 @@ But there is far too much sky for one person to scan, and the data is hard to re
 | Make faint things easier to see | An image stretch that changes visibility, never the underlying measurements |
 | Read the image like a sky map | **North is up and east is to the left** |
 | Know what you're looking at | Plain notes in the app: every frame is a real observation, and the sequence is separate observations, not video |
-| Come back to a spot | A list of saved coordinate targets [confirm how targets get saved] |
-| Know where you are in the sky | A survey grid / area guide [describe what it shows] |
+| Popular Locations | A list of saved coordinate targets are provided in the Target Guidance |
+| Know where you are in the sky | A survey grid / area guide that allows you to see your degree values |
 
 **Keyboard shortcuts:** arrow keys step through frames · Shift + arrows jump five frames · Space plays or pauses
 
